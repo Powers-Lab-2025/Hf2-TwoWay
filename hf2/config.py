@@ -1,0 +1,5 @@
+TINKER_START_COMMAND = "echo Starting TINKER in {path}"
+TINKER_STOP_COMMAND = "echo Stopping TINKER in {path}"
+REF_XYZ_PREFIX = "F7_ramp_original"
+XYZ_SUBDIR = "XYZs"
+DYN_SUFFIX = ".dyn"
