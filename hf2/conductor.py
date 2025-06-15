@@ -5,13 +5,7 @@ from pathlib import Path
 from datetime import datetime
 from hf2.conversion import convert_dyn_to_xyz
 from hf2.analysis import analysis
-from hf2.config import (
-    TINKER_START_COMMAND,
-    TINKER_STOP_COMMAND,
-    XYZ_SUBDIR,
-    DYN_SUFFIX,
-    REF_XYZ_PREFIX,
-)
+import hf2.config
 
 class SimulationPath:
     def __init__(self, path, verbose=True):
@@ -29,20 +23,20 @@ class SimulationPath:
         self.processed_dyns = set()
         self.last_converted = None
 
-        if not (self.path / f"{REF_XYZ_PREFIX}.xyz").exists():
-            raise FileNotFoundError(f"Missing reference xyz file: {REF_XYZ_PREFIX}.xyz")
+        if not (self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz").exists():
+            raise FileNotFoundError(f"Missing reference xyz file: {hf2.config.REF_XYZ_PREFIX}.xyz")
 
         if self.verbose:
             print(f"[INIT] Starting simulation in {self.path} using TINKER...")
 
-        os.system(TINKER_START_COMMAND.format(path=self.path))
+        os.system(hf2.config.TINKER_START_COMMAND.format(path=self.path))
 
     def _get_unprocessed_dyn_files(self):
         """
         Returns a sorted list of unprocessed .dyn files by modification time.
         Filters out files that have already been converted.
         """
-        dyn_files = list(self.path.glob(f"*{DYN_SUFFIX}"))
+        dyn_files = list(self.path.glob(f"*{hf2.config.DYN_SUFFIX}"))
         dyn_files = sorted(
             [f for f in dyn_files if f.name not in self.processed_dyns],
             key=lambda f: f.stat().st_mtime
@@ -61,8 +55,8 @@ class SimulationPath:
                     print(f"[MONITOR] New dyn file detected: {dyn_file.name}")
                 converted_path = convert_dyn_to_xyz(
                     dyn_file,
-                    ref_prefix=REF_XYZ_PREFIX,
-                    out_subdir=XYZ_SUBDIR,
+                    ref_prefix=hf2.config.REF_XYZ_PREFIX,
+                    out_subdir=hf2.config.XYZ_SUBDIR,
                     verbose=self.verbose
                 )
                 self.processed_dyns.add(dyn_file.name)
@@ -76,14 +70,15 @@ class SimulationPath:
         Passes the result to the take_action() dispatcher.
         """
         if self.last_converted is None:
-            return
+            return True
         try:
-            action = analysis(self.path / XYZ_SUBDIR)
+            action = analysis(self.path / hf2.config.XYZ_SUBDIR)
             if self.verbose:
                 print(f"[ANALYSIS] Path {self.label} suggested action code: {action}")
-            self.take_action(action)
+            return self.take_action(action)
         except Exception as e:
             print(f"[ERROR] Analysis failed for {self.label}: {e}")
+            return True
 
     def take_action(self, action_code):
         """
@@ -92,17 +87,24 @@ class SimulationPath:
         Parameters:
             action_code (int): Returned by analysis(); maps to a specific action.
         """
+
         if action_code == 1:
             self.spin_off()
+            return True
         elif action_code == 2:
             self.stop_as_failed()
+            return False
         elif action_code == 3:
             self.stop_as_success()
+            return False
         elif action_code == 4:
             self.continue_running()
+            return True
         else:
             if self.verbose:
                 print(f"[ACTION] Unknown or no-op action ({action_code}) for {self.label}")
+            return True
+
 
     def spin_off(self):
         """
@@ -125,7 +127,7 @@ class SimulationPath:
         if self.verbose:
             print(f"[SPINOFF] Launching new TINKER instance in {new_label}")
 
-        os.system(TINKER_START_COMMAND.format(path=new_path))
+        os.system(hf2.config.TINKER_START_COMMAND.format(path=new_path))
 
     def stop_as_failed(self):
         """
@@ -154,7 +156,7 @@ class SimulationPath:
         """
         new_path = self.path.parent / new_name
         self.path.rename(new_path)
-        os.system(TINKER_STOP_COMMAND.format(path=new_path))
+        os.system(hf2.config.TINKER_STOP_COMMAND.format(path=new_path))
         self.path = new_path
         self.label = new_name
 
@@ -171,4 +173,4 @@ class SimulationPath:
         Called externally by the simulation manager.
         """
         self.monitor_and_convert()
-        self.run_analysis()
+        return self.run_analysis()

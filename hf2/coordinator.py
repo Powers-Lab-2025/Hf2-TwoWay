@@ -54,11 +54,20 @@ class SimulationManager:
 
         This checks for new .dyn files, runs analysis, and triggers actions as needed.
         """
+
+        to_remove = []
         for label, conductor in list(self.paths.items()):
             try:
-                conductor.update()
+                still_active = conductor.update()
+                if not still_active:
+                    to_remove.append(label)
             except Exception as e:
                 print(f"[UPDATE ERROR] Failed to update {label}: {e}")
+        for label in to_remove:
+            if self.verbose:
+                print(f"[MANAGER] Removing stopped path: {label}")
+            del self.paths[label]
+
 
     def log_status(self):
         """
