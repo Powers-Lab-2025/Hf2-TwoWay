@@ -3,6 +3,7 @@ from pathlib import Path
 from collections import deque
 from datetime import datetime
 from hf2.conductor import SimulationPath
+import hf2.config
 
 class SimulationManager:
     def __init__(self, sim_root, verbose=True):
@@ -18,6 +19,9 @@ class SimulationManager:
         self.verbose = verbose
         self.start_time = datetime.now()
         self.recent_spinoffs = deque(maxlen=5)
+        self.active_paths = {}
+        self.queued_labels = deque()
+
 
         if self.verbose:
             print(f"[MANAGER] Monitoring simulation root: {self.sim_root}")
@@ -35,38 +39,58 @@ class SimulationManager:
 
         If a valid path is found, it creates a SimulationPath object and registers it.
         """
+
         for subdir in self.sim_root.iterdir():
             if not subdir.is_dir():
                 continue
             label = subdir.name
-            if label.startswith("A") and label not in self.paths:
+            if not label.startswith("A"):
+                continue
+            if label in self.active_paths or label in self.queued_labels:
+                continue
+    
+            if len(self.active_paths) < hf2.config.MAX_ACTIVE:
                 try:
                     conductor = SimulationPath(subdir, verbose=self.verbose)
-                    self.paths[label] = conductor
+                    self.active_paths[label] = conductor
                     if self.verbose:
-                        print(f"[MANAGER] Registered new active path: {label}")
+                        print(f"[MANAGER] Activated new path: {label}")
                 except Exception as e:
                     print(f"[MANAGER ERROR] Could not initialize {label}: {e}")
+            else:
+                self.queued_labels.append(label)
+                if self.verbose:
+                    print(f"[MANAGER] Queued path: {label} (max active reached)")
+
 
     def update_all(self):
-        """
-        Calls .update() on all registered simulation paths.
-
-        This checks for new .dyn files, runs analysis, and triggers actions as needed.
-        """
-
         to_remove = []
-        for label, conductor in list(self.paths.items()):
+    
+        for label, conductor in list(self.active_paths.items()):
             try:
                 still_active = conductor.update()
                 if not still_active:
                     to_remove.append(label)
             except Exception as e:
                 print(f"[UPDATE ERROR] Failed to update {label}: {e}")
+    
         for label in to_remove:
             if self.verbose:
                 print(f"[MANAGER] Removing stopped path: {label}")
-            del self.paths[label]
+            del self.active_paths[label]
+    
+        # Fill empty slots from the queue
+        while self.queued_labels and len(self.active_paths) < hf2.config.MAX_ACTIVE:
+            next_label = self.queued_labels.popleft()
+            next_path = self.sim_root / next_label
+            try:
+                conductor = SimulationPath(next_path, verbose=self.verbose)
+                self.active_paths[next_label] = conductor
+                if self.verbose:
+                    print(f"[MANAGER] Promoted queued path: {next_label}")
+            except Exception as e:
+                print(f"[MANAGER ERROR] Could not initialize queued {next_label}: {e}")
+    
 
 
     def log_status(self):
@@ -79,7 +103,8 @@ class SimulationManager:
         elapsed = datetime.now() - self.start_time
         print("\n=== Simulation Status ===")
         print(f"Uptime: {elapsed}")
-        print(f"Active paths: {len(self.paths)}")
+        print(f"Active paths: {len(self.active_paths)}")
+        print(f"Queued paths: {len(self.queued_labels)}")
         print("Recent spinoffs:")
         for item in self.recent_spinoffs:
             print(f" - {item}")

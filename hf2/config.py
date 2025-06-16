@@ -3,3 +3,4 @@ TINKER_STOP_COMMAND = "echo Stopping TINKER in {path}"
 REF_XYZ_PREFIX = "F7_ramp"
 XYZ_SUBDIR = "XYZs"
 DYN_SUFFIX = ".dyn"
+MAX_ACTIVE = 4
