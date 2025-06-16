@@ -2,6 +2,7 @@ import os
 import re
 import numpy as np
 from pathlib import Path
+import hf2.config
 
 def _read_dyn_coordinates(dyn_path, verbose=False):
     with open(dyn_path, 'r') as file:
@@ -50,6 +51,13 @@ def _write_xyz_file(out_path, num_atoms, header, atom_lines, coords):
             parts = atom_lines[i].strip().split()
             index = parts[0]
             atom_name = parts[1]
+
+            if hf2.config.NORMALIZE_ATOM_NAMES:
+                if atom_name == "HA":
+                    atom_name = "H"
+                elif atom_name == "CA":
+                    atom_name = "C"
+
             mol_id = parts[5]
             atom_type = parts[6]
             bonds = parts[7:]
