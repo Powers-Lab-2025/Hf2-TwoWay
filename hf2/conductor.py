@@ -26,10 +26,16 @@ class SimulationPath:
         if not (self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz").exists():
             raise FileNotFoundError(f"Missing reference xyz file: {hf2.config.REF_XYZ_PREFIX}.xyz")
 
-        if self.verbose:
-            print(f"[INIT] Starting simulation in {self.path} using TINKER...")
+        cmd = f"{hf2.config.TINKER_BINARY} {hf2.config.TINKER_PREFIX} {hf2.config.TINKER_NUM_STEPS} " \
+              f"{hf2.config.TINKER_TIMESTEP_FS} {hf2.config.TINKER_SNAPSHOT_INTERVAL_PS} " \
+              f"{hf2.config.TINKER_CONTROL_FLAGS} {hf2.config.TINKER_TEMP} 1 > " \
+              f"{hf2.config.TINKER_PREFIX}.{hf2.config.TINKER_RECORD_INDEX}.out"
 
-        os.system(hf2.config.TINKER_START_COMMAND.format(path=self.path))
+        if self.verbose:
+            print(f"[TINKER START] Running in {self.path}:\n  {cmd}")
+        
+        os.system(f"cd {self.path} && {cmd}")
+
 
     def _get_unprocessed_dyn_files(self):
         """
@@ -149,16 +155,15 @@ class SimulationPath:
 
     def _rename_and_stop(self, new_name):
         """
-        Handles stopping the simulation (via config command) and renaming the path folder.
-
-        Parameters:
-            new_name (str): New name of the directory after stopping.
+        Handles stopping the simulation (via creating a file) and renaming the path folder.
         """
-        new_path = self.path.parent / new_name
-        self.path.rename(new_path)
-        os.system(hf2.config.TINKER_STOP_COMMAND.format(path=new_path))
-        self.path = new_path
-        self.label = new_name
+        prefix = hf2.config.TINKER_PREFIX
+        stop_file = self.path / f"{prefix}.end"
+        stop_file.touch()
+
+        if self.verbose:
+            print(f"[TINKER STOP] Created stop file: {stop_file}")
+
 
     def continue_running(self):
         """
