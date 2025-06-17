@@ -36,6 +36,24 @@ class SimulationPath:
         
         os.system(f"cd {self.path} && {cmd}")
 
+    def check_inactivity(self):
+        """
+        Checks if the most recent .dyn file is older than the inactivity timeout.
+        If so, the simulation is considered stalled and is marked as failed.
+        """
+        dyn_files = list(self.path.glob(f"*{DYN_SUFFIX}"))
+        if not dyn_files:
+            return
+    
+        latest_dyn = max(dyn_files, key=lambda f: f.stat().st_mtime)
+        last_modified = latest_dyn.stat().st_mtime
+        elapsed = time.time() - last_modified
+    
+        if elapsed > hf2.config.TINKER_INACTIVITY_TIMEOUT:
+            if self.verbose:
+                print(f"[INACTIVE] No dyn update for {int(elapsed)}s in {self.label}. Marking as failed.")
+            self.stop_as_failed()
+
 
     def _get_unprocessed_dyn_files(self):
         """
@@ -177,5 +195,6 @@ class SimulationPath:
         One complete step: check for new .dyn files, convert, and run analysis.
         Called externally by the simulation manager.
         """
+        #self.check_inactivity()
         self.monitor_and_convert()
         return self.run_analysis()

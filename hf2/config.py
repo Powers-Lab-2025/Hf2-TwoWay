@@ -8,6 +8,8 @@ MAX_ACTIVE = 4
 # Normalize atom names (e.g., CA -> C, HA -> H) to be compatible with MDAnalysis
 NORMALIZE_ATOM_NAMES = True
 
+TINKER_INACTIVITY_TIMEOUT = 120  # seconds (2 minutes)
+
 
 # --------------------------------------------------
 # Directory and File Naming
