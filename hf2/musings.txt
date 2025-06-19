@@ -1,0 +1,14 @@
+Take a look at tin_key in the SnPy library. Specifically the functions for interacting with dynamic files (scroll all the way down). That code should work for any rigid body simulation I run (and can be modified for non-rigid bodies if we need to)
+
+I would rather you build your code to interface with mine than MDAnalysis. 
+At a minimum, it should be compatible with mine (as long as your inputs and outputs are, ultimately, tinker files (.xyz, .key and .dyn) that should be fine.
+Even better, try to use mine as a template if you are re-inventing a wheel that I've previously re-invented
+
+Minimize dependencies - assume your program will be called from a linux command line either interactively or as a script. Minimize the number of keystrokes a user needs to launch a tinker spy
+If you make any os.system calls, assume it will be run on a modern linux distro in a bash shell.
+
+Identify what portions of your code:
+  consist of a minimum and general implementation that someone who isn't us might use to do something similar to, but different from, what we do
+  what portions of your code a user would need to interact with in order to make it fit their purpose (analysis and config things)
+
+What assumptions have you made about the system, files, naming conventions, etc?
