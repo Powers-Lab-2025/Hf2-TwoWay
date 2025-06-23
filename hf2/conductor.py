@@ -22,6 +22,8 @@ class SimulationPath:
         self.label = self.path.name
         self.last_dyn_mtime = None
         self.last_converted = None
+        self.frame_counter = 0
+
 
         if not (self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz").exists():
             raise FileNotFoundError(f"Missing reference xyz file: {hf2.config.REF_XYZ_PREFIX}.xyz")
@@ -71,12 +73,16 @@ class SimulationPath:
             try:
                 if self.verbose:
                     print(f"[MONITOR] Detected update in: {dyn_file.name}")
+                self.frame_counter += 1
+                frame_label = f"{self.frame_counter:05d}"
                 converted_path = convert_dyn_to_xyz(
                     dyn_file,
                     ref_prefix=hf2.config.REF_XYZ_PREFIX,
                     out_subdir=hf2.config.XYZ_SUBDIR,
+                    frame_label=frame_label,
                     verbose=self.verbose
                 )
+
                 self.last_dyn_mtime = dyn_file.stat().st_mtime
                 self.last_converted = converted_path
             except Exception as e:

@@ -65,7 +65,7 @@ def _write_xyz_file(out_path, num_atoms, header, atom_lines, coords):
             out.write(f"{index:>5s}  {atom_name:<2s}  {coords[0,i]:12.6f}  {coords[1,i]:12.6f}  {coords[2,i]:12.6f}  {mol_id:>5s}  {atom_type:>5s}{bond_str}\n")
 
 
-def convert_dyn_to_xyz(dyn_path, ref_prefix="F7_ramp_original", out_subdir="XYZs", verbose=False):
+def convert_dyn_to_xyz(dyn_path, ref_prefix="F7_ramp_original", out_subdir="XYZs", frame_label=None, verbose=False):
     """
     Convert a .dyn file into a bonded .xyz using a reference .xyz file for atom topology.
 
@@ -99,7 +99,10 @@ def convert_dyn_to_xyz(dyn_path, ref_prefix="F7_ramp_original", out_subdir="XYZs
 
     header, atom_lines = _get_reference_xyz(ref_xyz_path, num_atoms)
 
-    out_path = xyz_dir / f"{dyn_stem}_converted.xyz"
+    filename = f"{dyn_stem}_{frame_label}_converted.xyz" if frame_label else f"{dyn_stem}_converted.xyz"
+    out_path = xyz_dir / filename
+
+
     _write_xyz_file(out_path, num_atoms, header, atom_lines, coords)
 
     if verbose:
