@@ -20,7 +20,7 @@ class SimulationPath:
         self.path = Path(path).resolve()
         self.verbose = verbose
         self.label = self.path.name
-        self.processed_dyns = set()
+        self.last_dyn_mtime = None
         self.last_converted = None
 
         if not (self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz").exists():
@@ -55,38 +55,33 @@ class SimulationPath:
             self.stop_as_failed()
 
 
-    def _get_unprocessed_dyn_files(self):
-        """
-        Returns a sorted list of unprocessed .dyn files by modification time.
-        Filters out files that have already been converted.
-        """
-        dyn_files = list(self.path.glob(f"*{hf2.config.DYN_SUFFIX}"))
-        dyn_files = sorted(
-            [f for f in dyn_files if f.name not in self.processed_dyns],
-            key=lambda f: f.stat().st_mtime
-        )
-        return dyn_files
+    def _dyn_file_updated(self):
+        dyn_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.dyn"
+        if not dyn_file.exists():
+            return False, None
+        mtime = dyn_file.stat().st_mtime
+        if self.last_dyn_mtime is None or mtime > self.last_dyn_mtime:
+            return True, dyn_file
+        return False, None
+
 
     def monitor_and_convert(self):
-        """
-        Checks for new .dyn files in the path, converts each to .xyz format using the reference file,
-        and stores them in the configured XYZs/ subdirectory.
-        """
-        new_dyns = self._get_unprocessed_dyn_files()
-        for dyn_file in new_dyns:
+        updated, dyn_file = self._dyn_file_updated()
+        if updated:
             try:
                 if self.verbose:
-                    print(f"[MONITOR] New dyn file detected: {dyn_file.name}")
+                    print(f"[MONITOR] Detected update in: {dyn_file.name}")
                 converted_path = convert_dyn_to_xyz(
                     dyn_file,
                     ref_prefix=hf2.config.REF_XYZ_PREFIX,
                     out_subdir=hf2.config.XYZ_SUBDIR,
                     verbose=self.verbose
                 )
-                self.processed_dyns.add(dyn_file.name)
+                self.last_dyn_mtime = dyn_file.stat().st_mtime
                 self.last_converted = converted_path
             except Exception as e:
                 print(f"[ERROR] Failed to convert {dyn_file.name}: {e}")
+
 
     def run_analysis(self):
         """
