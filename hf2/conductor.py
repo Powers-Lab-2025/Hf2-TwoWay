@@ -133,25 +133,47 @@ class SimulationPath:
     def spin_off(self):
         """
         Creates a new simulation path directory by copying the current one and incrementing
-        the suffix (e.g., A5-1 ➝ A5-1-1). Launches a new TINKER simulation in the new directory.
+        the suffix (e.g., A5-1 -> A5-1-1). Launches a new TINKER simulation in the new directory.
         """
         base_name = self.label
-        parent = self.path.parent
-        siblings = [d.name for d in parent.iterdir() if d.is_dir() and d.name.startswith(base_name + "-")]
+    
+        if hf2.config.PASSIVE_MODE and hf2.config.NESTED_SPINOFF_DIRS:
+            spinoff_root = self.path / "spinoffs"
+            spinoff_root.mkdir(exist_ok=True)
+        else:
+            spinoff_root = self.path.parent
+    
+        siblings = [d.name for d in spinoff_root.iterdir() if d.is_dir() and d.name.startswith(base_name + "-")]
         suffixes = [int(d.split("-")[-1]) for d in siblings if d.split("-")[-1].isdigit()]
         new_suffix = max(suffixes + [0]) + 1
         new_label = f"{base_name}-{new_suffix}"
-        new_path = parent / new_label
-
+        new_path = spinoff_root / new_label
+    
         if self.verbose:
-            print(f"[SPINOFF] Creating new path: {new_label}")
+            print(f"[SPINOFF] Creating new path: {new_path.relative_to(self.path.parent)}")
+    
+        if hf2.config.SPINOFF_COPY_MODE == "minimal":
+            to_copy = []
+            for f in self.path.iterdir():
+                if f.suffix == ".dyn" or f.suffix == ".key":
+                    to_copy.append(f)
+                elif f.name == f"{hf2.config.REF_XYZ_PREFIX}.xyz":
+                    to_copy.append(f)
+            new_path.mkdir()
+            for f in to_copy:
+                shutil.copy(f, new_path / f.name)
+        else:
+            shutil.copytree(self.path, new_path, ignore=shutil.ignore_patterns("*.log", "*.out", "*.end"))
+    
+        if hf2.config.PASSIVE_MODE:
+            if self.verbose:
+                print(f"[PASSIVE] {new_label} created but not started (passive mode ON)")
+        else:
+            if self.verbose:
+                print(f"[SPINOFF] Launching new TINKER instance in {new_label}")
+            os.system(hf2.config.TINKER_START_COMMAND.format(path=new_path))
 
-        shutil.copytree(self.path, new_path, ignore=shutil.ignore_patterns("*.log", "*.out"))
 
-        if self.verbose:
-            print(f"[SPINOFF] Launching new TINKER instance in {new_label}")
-
-        os.system(hf2.config.TINKER_START_COMMAND.format(path=new_path))
 
     def stop_as_failed(self):
         """

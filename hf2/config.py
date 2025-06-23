@@ -1,5 +1,5 @@
 # --------------------------------------------------
-# Simulation Control Settings
+# Control Settings
 # --------------------------------------------------
 
 # Maximum number of simulation paths that can run at once
@@ -9,6 +9,12 @@ MAX_ACTIVE = 4
 NORMALIZE_ATOM_NAMES = True
 
 TINKER_INACTIVITY_TIMEOUT = 120  # seconds (2 minutes)
+
+PASSIVE_MODE = True  # If True, spinoffs will not start TINKER
+
+NESTED_SPINOFF_DIRS = True
+
+SPINOFF_COPY_MODE = "minimal" # What files to copy into spinoff: options are "all", "minimal" - "minimal" = copy .dyn, .key, and original .xyz only
 
 
 # --------------------------------------------------
