@@ -89,6 +89,7 @@ def write_focus_file(xyz_dir, mol_index, col, dist, anchor_xy):
             f"distance_from_anchor: {dist:.2f}\n"
             f"anchor_x: {anchor_xy[0]:.2f}\n"
             f"anchor_y: {anchor_xy[1]:.2f}\n"
+            f"frame: {frame_counter}\n"
         )
 
 
