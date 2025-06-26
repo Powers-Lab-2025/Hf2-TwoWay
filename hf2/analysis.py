@@ -68,8 +68,32 @@ def check_failure(frags):
     return S < 0.6
 
 
+
+def write_focus_file(xyz_dir, mol_index, col, dist, anchor_xy):
+    """Creates molecule.focus in the NEW spinoff directory with metadata."""
+    focus_dir = xyz_dir.parent / "spinoffs"
+    if hf2.config.NESTED_SPINOFF_DIRS and hf2.config.PASSIVE_MODE:
+        spinoff_dirs = sorted(focus_dir.glob("*/"), key=os.path.getmtime)
+        if spinoff_dirs:
+            newest_dir = spinoff_dirs[-1]
+            focus_path = newest_dir / "molecule.focus"
+        else:
+            focus_path = xyz_dir.parent / "molecule.focus"
+    else:
+        focus_path = xyz_dir.parent / "molecule.focus"
+
+    with open(focus_path, "w") as f:
+        f.write(
+            f"fragment_index: {mol_index}\n"
+            f"old_column: {col}\n"
+            f"distance_from_anchor: {dist:.2f}\n"
+            f"anchor_x: {anchor_xy[0]:.2f}\n"
+            f"anchor_y: {anchor_xy[1]:.2f}\n"
+        )
+
+
 def check_hop(frags_latest, frags_prev, xyz_dir):
-    """Returns a list of fragments that meet hop criteria for spinoff."""
+    """Returns a list of molecules that meet hop criteria for spinoff."""
     coms_prev = np.array([frag.center_of_mass() for frag in frags_prev])
     coms_latest = np.array([frag.center_of_mass() for frag in frags_latest])
     box = frags_latest[0].dimensions[:3]
@@ -87,50 +111,51 @@ def check_hop(frags_latest, frags_prev, xyz_dir):
             box_xy = box[:2]
             dist = np.linalg.norm((com[:2] - anchor + box_xy / 2) % box_xy - box_xy / 2)
             if dist > HOP_DISTANCE_FACTOR * r:
-                spin_offs.append((i, dist, assigned_columns[i]))
+                spin_offs.append((i, dist, assigned_columns[i], anchor))
 
     spin_offs.sort(key=lambda x: -x[1])
     return spin_offs[:MAX_SPINOFFS_PER_STEP]
 
 
-def write_focus_file(xyz_dir, frag_index, col, dist):
-    """Creates or overwrites fragment.focus with info on the tracked fragment."""
-    with open(xyz_dir.parent / "fragment.focus", "w") as f:
-        f.write(f"{frag_index},{col},{dist:.4f}\n")
-
-
 def check_focus(xyz_dir, frags):
-    """Checks if a tracked fragment has completed a hop or failed to do so."""
-    focus_file = xyz_dir.parent / "fragment.focus"
+    """Checks if a tracked molecule completed a hop or failed."""
+    focus_file = xyz_dir.parent / "molecule.focus"
     if not focus_file.exists():
         return None
 
+    metadata = {}
     with open(focus_file) as f:
-        frag_index, orig_col, orig_dist = map(float, f.read().strip().split(","))
+        for line in f:
+            k, v = line.strip().split(":")
+            metadata[k.strip()] = float(v.strip())
 
-    frag_index, orig_col = int(frag_index), int(orig_col)
+    mol_index = int(metadata["fragment_index"])
+    orig_col = int(metadata["old_column"])
+    orig_dist = float(metadata["distance_from_anchor"])
+    anchor_xy = np.array([metadata["anchor_x"], metadata["anchor_y"]])
+
     coms = np.array([frag.center_of_mass() for frag in frags])
     box = frags[0].dimensions[:3]
-
     anchors, _ = ar.guess_column_positions(coms, box, return_noise=False)
     assigned_columns, r = ar.assign_fragments_to_columns(coms, anchors, box)
-    current_col = assigned_columns[frag_index]
+    current_col = assigned_columns[mol_index]
 
     box_xy = box[:2]
-    anchor = anchors[orig_col]
-    dist = np.linalg.norm((coms[frag_index][:2] - anchor + box_xy / 2) % box_xy - box_xy / 2)
+    dist = np.linalg.norm((coms[mol_index][:2] - anchor_xy + box_xy / 2) % box_xy - box_xy / 2)
 
     if current_col != orig_col:
-        log_action(f"Success: Fragment {frag_index} hopped from {orig_col} to {current_col}")
+        log_action(f"Success: Molecule {mol_index} hopped from {orig_col} to {current_col}")
         return 3
-    elif dist > float(orig_dist):
-        log_action(f"Re-spinoff: Fragment {frag_index} now {dist:.2f} A from column {orig_col}")
+    elif dist > orig_dist:
+        log_action(f"Re-spinoff: Molecule {mol_index} now {dist:.2f} A from column {orig_col}")
         return 1
     elif dist < r * HOP_DISTANCE_FACTOR:
-        log_action(f"Failed hop: Fragment {frag_index} returned to home column {orig_col}")
+        log_action(f"Failed hop: Molecule {mol_index} returned to home column {orig_col}")
         return 2
 
     return None
+
+
 
 
 def log_action(text):
