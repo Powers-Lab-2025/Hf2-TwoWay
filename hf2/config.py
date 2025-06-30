@@ -22,7 +22,7 @@ SPINOFF_COPY_MODE = "minimal" # What files to copy into spinoff: options are "al
 # --------------------------------------------------
 
 # Prefix used to identify the reference .xyz file (e.g., "F7_ramp_original.xyz")
-REF_XYZ_PREFIX = "F7_ramp"
+REF_XYZ_PREFIX = "F8_ramp"
 
 # Subdirectory inside each simulation path where converted .xyz files are stored
 XYZ_SUBDIR = "XYZs"
@@ -76,6 +76,9 @@ HOP_DISTANCE_FACTOR = 0.4  # k value; adjust as needed
 
 # Max number of fragments to spin off in one analysis cycle
 MAX_SPINOFFS_PER_STEP = 2  # e.g., spin off the 2 farthest fragments
+
+COOLDOWN_GLOBAL = 10  # No spinoffs for X frames after any event
+COOLDOWN_MOLECULE = 20  # No spinoff from same molecule within Y frames
 
 
 
