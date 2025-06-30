@@ -1,4 +1,3 @@
-import os
 import numpy as np
 from pathlib import Path
 import MDAnalysis as mda
@@ -9,12 +8,11 @@ from hf2.config import (
     HOP_CHECK_INTERVAL,
     HOP_DISTANCE_FACTOR,
     MAX_SPINOFFS_PER_STEP,
-    NORMALIZE_ATOM_NAMES,
 )
 
 frame_counter = 0
 
-def analysis(xyz_dir):
+def analysis(sim_dir):
     """
     Main analysis entry point. Called by a conductor object to determine what action to take.
     It performs several modular checks and returns an action code:
@@ -24,38 +22,38 @@ def analysis(xyz_dir):
     4 - Continue
     """
     global frame_counter
-    xyz_dir = Path(xyz_dir)
-    traj_files = sorted(xyz_dir.glob("*converted.xyz"), key=os.path.getmtime)
-    if len(traj_files) < 2:
-        return 4  # not enough frames to do anything
+    sim_dir = Path(sim_dir)
+    traj_files = sorted(sim_dir.glob(f"{REF_XYZ_PREFIX}.*"), key=lambda f: f.stat().st_mtime)
 
-    frame_counter += 1
+    if len(traj_files) < 2:
+        return 4  # Not enough frames yet
+
     latest = traj_files[-1]
     previous = traj_files[-2]
+    frame_counter += 1
 
     u_latest = mda.Universe(str(latest), format="TXYZ")
     u_prev = mda.Universe(str(previous), format="TXYZ")
 
-
     frags_latest = list(u_latest.select_atoms("all").fragments)
     frags_prev = list(u_prev.select_atoms("all").fragments)
 
-    # Perform modular checks
+    # Check for failure based on orientational order
     if frame_counter % ORIENT_FAIL_INTERVAL == 0:
-        fail = check_failure(frags_latest)
-        if fail:
+        if check_failure(frags_latest):
             log_action("Failure: S < 0.6")
             return 2
 
+    # Check for success/failure or hop opportunities
     if frame_counter % HOP_CHECK_INTERVAL == 0:
-        focus_result = check_focus(xyz_dir, frags_latest)
+        focus_result = check_focus(sim_dir, frags_latest)
         if focus_result is not None:
             return focus_result
 
-        spinoff_targets = check_hop(frags_latest, frags_prev, xyz_dir)
+        spinoff_targets = check_hop(frags_latest, frags_prev, sim_dir)
         if spinoff_targets:
             for frag_idx, dist, col in spinoff_targets:
-                write_focus_file(xyz_dir, frag_idx, col, dist)
+                write_focus_file(sim_dir, frag_idx, col, dist, frame_number=frame_counter)
                 log_action(f"Spinoff: Fragment {frag_idx} is {dist:.2f} A from column {col}")
             return 1
 
@@ -68,7 +66,7 @@ def check_failure(frags):
     return S < 0.6
 
 
-def check_hop(frags_latest, frags_prev, xyz_dir):
+def check_hop(frags_latest, frags_prev, sim_dir):
     """Returns a list of fragments that meet hop criteria for spinoff."""
     coms_prev = np.array([frag.center_of_mass() for frag in frags_prev])
     coms_latest = np.array([frag.center_of_mass() for frag in frags_latest])
@@ -82,33 +80,43 @@ def check_hop(frags_latest, frags_prev, xyz_dir):
     spin_offs = []
     for i, label in enumerate(labels_latest):
         if label == -1:
-            com = coms_latest[i]
             anchor = anchors_prev[assigned_columns[i]]
             box_xy = box[:2]
-            dist = np.linalg.norm((com[:2] - anchor + box_xy / 2) % box_xy - box_xy / 2)
+            dist = np.linalg.norm((coms_latest[i][:2] - anchor + box_xy / 2) % box_xy - box_xy / 2)
             if dist > HOP_DISTANCE_FACTOR * r:
                 spin_offs.append((i, dist, assigned_columns[i]))
 
-    spin_offs.sort(key=lambda x: -x[1])
+    spin_offs.sort(key=lambda x: -x[1])  # Sort by distance descending
     return spin_offs[:MAX_SPINOFFS_PER_STEP]
 
 
-def write_focus_file(xyz_dir, frag_index, col, dist):
-    """Creates or overwrites fragment.focus with info on the tracked fragment."""
-    with open(xyz_dir.parent / "fragment.focus", "w") as f:
-        f.write(f"{frag_index},{col},{dist:.4f}\n")
+def write_focus_file(sim_dir, frag_index, from_col, dist, frame_number=None, to_col=None):
+    """Writes molecule.focus with hopping info for a tracked fragment."""
+    focus_path = sim_dir / "molecule.focus"
+    with open(focus_path, "w") as f:
+        f.write("Tracked Fragment Hopping Info\n")
+        f.write("-----------------------------\n")
+        f.write(f"Fragment index:     {frag_index}\n")
+        f.write(f"From column:        {from_col}\n")
+        if to_col is not None:
+            f.write(f"To column:          {to_col}\n")
+        f.write(f"Trigger distance:   {dist:.4f} A\n")
+        if frame_number is not None:
+            f.write(f"Detected at frame:  {frame_number}\n")
 
 
-def check_focus(xyz_dir, frags):
+def check_focus(sim_dir, frags):
     """Checks if a tracked fragment has completed a hop or failed to do so."""
-    focus_file = xyz_dir.parent / "fragment.focus"
+    focus_file = sim_dir / "molecule.focus"
     if not focus_file.exists():
         return None
 
     with open(focus_file) as f:
-        frag_index, orig_col, orig_dist = map(float, f.read().strip().split(","))
+        lines = f.readlines()
+        frag_index = int(lines[2].split(":")[1])
+        orig_col = int(lines[3].split(":")[1])
+        orig_dist = float(lines[5].split(":")[1].split()[0])  # Remove A
 
-    frag_index, orig_col = int(frag_index), int(orig_col)
     coms = np.array([frag.center_of_mass() for frag in frags])
     box = frags[0].dimensions[:3]
 
@@ -116,15 +124,15 @@ def check_focus(xyz_dir, frags):
     assigned_columns, r = ar.assign_fragments_to_columns(coms, anchors, box)
     current_col = assigned_columns[frag_index]
 
-    box_xy = box[:2]
     anchor = anchors[orig_col]
+    box_xy = box[:2]
     dist = np.linalg.norm((coms[frag_index][:2] - anchor + box_xy / 2) % box_xy - box_xy / 2)
 
     if current_col != orig_col:
         log_action(f"Success: Fragment {frag_index} hopped from {orig_col} to {current_col}")
         return 3
-    elif dist > float(orig_dist):
-        log_action(f"Re-spinoff: Fragment {frag_index} now {dist:.2f} A from column {orig_col}")
+    elif dist > orig_dist:
+        log_action(f"Re-spinoff: Fragment {frag_index} now {dist:.2f} Å from column {orig_col}")
         return 1
     elif dist < r * HOP_DISTANCE_FACTOR:
         log_action(f"Failed hop: Fragment {frag_index} returned to home column {orig_col}")

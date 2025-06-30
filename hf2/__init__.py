@@ -12,6 +12,5 @@ from .analysis import analysis
 __all__ = [
     "SimulationPath",
     "SimulationManager",
-    "convert_dyn_to_xyz",
     "analysis"
 ]

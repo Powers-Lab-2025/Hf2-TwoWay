@@ -68,42 +68,40 @@ class SimulationPath:
 
 
     def monitor_and_convert(self):
-        updated, dyn_file = self._dyn_file_updated()
-        if updated:
-            try:
-                if self.verbose:
-                    print(f"[MONITOR] Detected update in: {dyn_file.name}")
-                self.frame_counter += 1
-                frame_label = f"{self.frame_counter:05d}"
-                converted_path = convert_dyn_to_xyz(
-                    dyn_file,
-                    ref_prefix=hf2.config.REF_XYZ_PREFIX,
-                    out_subdir=hf2.config.XYZ_SUBDIR,
-                    frame_label=frame_label,
-                    verbose=self.verbose
-                )
+        """
+        Detects if a new frame was written by checking .xyz files (e.g., F8_ramp.001, F8_ramp.002).
+        Sets self.frame_counter and self.last_converted accordingly.
+        """
+        pattern = f"{hf2.config.REF_XYZ_PREFIX}.*"
+        xyz_files = sorted(self.path.glob(pattern), key=lambda f: f.stat().st_mtime)
+        if not xyz_files:
+            return
+    
+        latest_xyz = xyz_files[-1]
+        mtime = latest_xyz.stat().st_mtime
+    
+        if self.last_converted is None or mtime > self.last_converted.stat().st_mtime:
+            self.last_converted = latest_xyz
+            self.frame_counter += 1
+            if self.verbose:
+                print(f"[MONITOR] Detected new XYZ frame: {latest_xyz.name}")
 
-                self.last_dyn_mtime = dyn_file.stat().st_mtime
-                self.last_converted = converted_path
-            except Exception as e:
-                print(f"[ERROR] Failed to convert {dyn_file.name}: {e}")
 
 
     def run_analysis(self):
         """
-        Runs the user-defined analysis() function on the most recent .xyz file.
-        Passes the result to the take_action() dispatcher.
+        Runs the user-defined analysis() function on the simulation directory.
+        Passes the entire simulation directory path to the analysis function.
         """
-        if self.last_converted is None:
-            return True
         try:
-            action = analysis(self.path / hf2.config.XYZ_SUBDIR)
+            action = analysis(self.path)
             if self.verbose:
                 print(f"[ANALYSIS] Path {self.label} suggested action code: {action}")
             return self.take_action(action)
         except Exception as e:
             print(f"[ERROR] Analysis failed for {self.label}: {e}")
             return True
+
 
     def take_action(self, action_code):
         """
@@ -133,8 +131,8 @@ class SimulationPath:
 
     def spin_off(self):
         """
-        Creates a new simulation path directory by copying the current one and incrementing
-        the suffix (e.g., A5-1 -> A5-1-1). Launches a new TINKER simulation in the new directory.
+        Creates a new simulation path directory using the latest .xyz, .dyn, and .key files
+        along with the molecule.focus file (written by analysis).
         """
         base_name = self.label
     
@@ -149,22 +147,26 @@ class SimulationPath:
         new_suffix = max(suffixes + [0]) + 1
         new_label = f"{base_name}-{new_suffix}"
         new_path = spinoff_root / new_label
+        new_path.mkdir()
     
-        if self.verbose:
-            print(f"[SPINOFF] Creating new path: {new_path.relative_to(self.path.parent)}")
+        # Identify latest .xyz and .dyn files
+        xyz_files = sorted(self.path.glob(f"{hf2.config.REF_XYZ_PREFIX}.*"), key=lambda f: f.stat().st_mtime)
+        dyn_files = sorted(self.path.glob(f"{hf2.config.REF_XYZ_PREFIX}*.dyn"), key=lambda f: f.stat().st_mtime)
+        key_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.key"
+        focus_file = self.path / "molecule.focus"
     
-        if hf2.config.SPINOFF_COPY_MODE == "minimal":
-            to_copy = []
-            for f in self.path.iterdir():
-                if f.suffix == ".dyn" or f.suffix == ".key":
-                    to_copy.append(f)
-                elif f.name == f"{hf2.config.REF_XYZ_PREFIX}.xyz":
-                    to_copy.append(f)
-            new_path.mkdir()
-            for f in to_copy:
-                shutil.copy(f, new_path / f.name)
-        else:
-            shutil.copytree(self.path, new_path, ignore=shutil.ignore_patterns("*.log", "*.out", "*.end"))
+        to_copy = []
+        if xyz_files:
+            to_copy.append(xyz_files[-1])
+        if dyn_files:
+            to_copy.append(dyn_files[-1])
+        if key_file.exists():
+            to_copy.append(key_file)
+        if focus_file.exists():
+            to_copy.append(focus_file)
+    
+        for f in to_copy:
+            shutil.copy(f, new_path / f.name)
     
         if hf2.config.PASSIVE_MODE:
             if self.verbose:
@@ -173,6 +175,7 @@ class SimulationPath:
             if self.verbose:
                 print(f"[SPINOFF] Launching new TINKER instance in {new_label}")
             os.system(hf2.config.TINKER_START_COMMAND.format(path=new_path))
+
 
 
 
