@@ -92,6 +92,8 @@ def analysis(sim_dir):
         and f.name.startswith(f"{REF_XYZ_PREFIX}.")
         and len(f.suffixes) == 1
         and f.suffix[1:].isdigit()
+        and not f.name.endswith(".dyn")
+        and not f.name.endswith(".key")
     ], key=lambda f: f.stat().st_mtime)
 
     if len(traj_files) < 2:
