@@ -51,13 +51,13 @@ def analysis(sim_dir):
         com_prev = sn.aa_cm()
 
         # cluster columns on previous frame
-        anchors_prev, labels_prev = sn.tin_key.guess_columns(com_prev, box, return_noise=True)
-        assigned_columns, r = sn.tin_key.assign_to_columns(com_prev, anchors_prev, box)
+        anchors_prev, labels_prev = (com_prev, box, return_noise=True)
+        assigned_columns, r = (com_prev, anchors_prev, box)
 
         # cluster latest frame
         sn.read_frame(latest)
         com_latest = sn.aa_cm()
-        anchors_latest, labels_latest = sn.tin_key.guess_columns(com_latest, box, return_noise=True)
+        anchors_latest, labels_latest = (com_latest, box, return_noise=True)
 
         spin_offs = []
         for i, label in enumerate(labels_latest):
