@@ -103,6 +103,8 @@ def analysis(sim_dir):
     previous = traj_files[-2]
     frame_counter += 1
 
+    print(f"[ANALYSIS] Latest XYZ file: {latest}.")
+
     # Read latest frame
     sn.read_frame(latest)
     com_latest = sn.aa_cm()
