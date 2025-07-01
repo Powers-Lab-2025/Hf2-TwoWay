@@ -34,62 +34,55 @@ def analysis(sim_dir):
     previous = traj_files[-2]
     frame_counter += 1
 
-    u_latest = sn.Universe(latest)
-    u_prev = sn.Universe(previous)
+    # Read latest frame
+    sn.read_frame(latest)
+    com_latest = sn.aa_cm()
+    box = sn.DIMS.copy()
 
-    mols_latest = u_latest.molecules
-    mols_prev = u_prev.molecules
-
-    # Check for failure
     if frame_counter % ORIENT_FAIL_INTERVAL == 0:
-        if check_failure(mols_latest):
-            return 2, "Failure: S < 0.6", ""
+        if sn.oriS() < 0.6:
+            return 2, f"Failure: S < 0.6 at frame {extract_frame_number(latest.name)}", ""
 
-    # Check for hops/spinoffs
     if frame_counter % HOP_CHECK_INTERVAL == 0:
         if frame_counter - last_global_spin_frame < COOLDOWN_GLOBAL:
             return 4, "", ""
 
-        spinoff_targets = check_hop(mols_latest, mols_prev)
+        sn.read_frame(previous)
+        com_prev = sn.aa_cm()
 
-        for mol_id, dist, from_col in spinoff_targets:
-            last_spin = molecule_last_spin_frame.get(mol_id, -COOLDOWN_MOLECULE)
-            if frame_counter - last_spin >= COOLDOWN_MOLECULE:
-                frame_num = extract_frame_number(latest.name)
-                filename = f"{REF_XYZ_PREFIX}_m{mol_id}_t{frame_num}.dyn"
-                logline = f"Spinoff: Mol {mol_id} hopped from column {from_col} at frame {frame_num} (dist={dist:.2f} A)"
+        # cluster columns on previous frame
+        anchors_prev, labels_prev = sn.tin_key.guess_columns(com_prev, box, return_noise=True)
+        assigned_columns, r = sn.tin_key.assign_to_columns(com_prev, anchors_prev, box)
 
-                last_global_spin_frame = frame_counter
-                molecule_last_spin_frame[mol_id] = frame_counter
+        # cluster latest frame
+        sn.read_frame(latest)
+        com_latest = sn.aa_cm()
+        anchors_latest, labels_latest = sn.tin_key.guess_columns(com_latest, box, return_noise=True)
 
-                return 1, logline, filename
+        spin_offs = []
+        for i, label in enumerate(labels_latest):
+            if label == -1:
+                anchor = anchors_prev[assigned_columns[i]]
+                box_xy = box[:2]
+                dist = np.linalg.norm((com_latest[:2, i] - anchor + box_xy / 2) % box_xy - box_xy / 2)
+
+                if dist > HOP_DISTANCE_FACTOR * r:
+                    mol_id = i  # index is ID
+                    last_spin = molecule_last_spin_frame.get(mol_id, -COOLDOWN_MOLECULE)
+
+                    if frame_counter - last_spin >= COOLDOWN_MOLECULE:
+                        frame_num = extract_frame_number(latest.name)
+                        filename = f"{REF_XYZ_PREFIX}_m{mol_id}_t{frame_num}.dyn"
+                        logline = f"Spinoff: Mol {mol_id} hopped from column {assigned_columns[i]} at frame {frame_num} (dist={dist:.2f} Å)"
+
+                        last_global_spin_frame = frame_counter
+                        molecule_last_spin_frame[mol_id] = frame_counter
+                        return 1, logline, filename
+
+        # If no valid spinoffs
+        return 4, "", ""
 
     return 4, "", ""
-
-def check_failure(mols):
-    return sn.compute_orientational_order_parameter(mols) < 0.6
-
-def check_hop(mols_latest, mols_prev):
-    coms_prev = np.array([mol.center_of_mass() for mol in mols_prev])
-    coms_latest = np.array([mol.center_of_mass() for mol in mols_latest])
-    box = mols_latest[0].box
-
-    anchors_prev, labels_prev = sn.guess_column_positions(coms_prev, box, return_noise=True)
-    assigned_columns, r = sn.assign_fragments_to_columns(coms_prev, anchors_prev, box)
-    anchors_latest, labels_latest = sn.guess_column_positions(coms_latest, box, return_noise=True)
-
-    spin_offs = []
-    for i, label in enumerate(labels_latest):
-        if label == -1:
-            anchor = anchors_prev[assigned_columns[i]]
-            box_xy = box[:2]
-            dist = np.linalg.norm((coms_latest[i][:2] - anchor + box_xy / 2) % box_xy - box_xy / 2)
-            if dist > HOP_DISTANCE_FACTOR * r:
-                mol_id = mols_latest[i].id
-                spin_offs.append((mol_id, dist, assigned_columns[i]))
-
-    spin_offs.sort(key=lambda x: -x[1])
-    return spin_offs[:MAX_SPINOFFS_PER_STEP]
 
 def extract_frame_number(filename):
     parts = filename.split(".")
