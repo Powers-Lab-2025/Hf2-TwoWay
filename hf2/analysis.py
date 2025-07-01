@@ -15,6 +15,73 @@ frame_counter = 0
 last_global_spin_frame = -COOLDOWN_GLOBAL
 molecule_last_spin_frame = {}  # mol_id -> last spin frame
 
+
+from sklearn.cluster import DBSCAN
+
+def guess_column_positions(coms, box, eps=2.0, min_samples=5, return_noise=False, verbose=False):
+    """
+    Cluster XY COMs to find column centers.
+    Returns: (anchors, labels)
+    """
+    xy_coords = coms[:2].T  # shape: (N, 2)
+    box_xy = box[:2]
+    xy_wrapped = xy_coords % box_xy
+
+    db = DBSCAN(eps=eps, min_samples=min_samples).fit(xy_wrapped)
+    labels = db.labels_
+
+    if verbose:
+        n_noise = np.sum(labels == -1)
+        if n_noise > 0:
+            print(f"{n_noise} out of {len(labels)} COMs were not assigned to any column.")
+        else:
+            print("All COMs assigned to columns.")
+
+    anchors = []
+    for label in sorted(set(labels)):
+        if label == -1:
+            continue
+        cluster_points = xy_wrapped[labels == label]
+        anchor = np.mean(cluster_points, axis=0)
+        anchors.append(anchor)
+
+    anchors = np.array(anchors)
+
+    if return_noise:
+        return anchors, labels
+    else:
+        return anchors
+
+
+def assign_fragments_to_columns(coms, anchors, box, verbose=False):
+    """
+    Assign each COM to its nearest anchor using periodic XY distance.
+    Returns (assigned_columns, r) where r is average inter-anchor spacing.
+    """
+    xy_coords = coms[:2].T  # shape: (N, 2)
+    box_xy = box[:2]
+    xy_wrapped = xy_coords % box_xy
+
+    assigned_columns = []
+    for xy in xy_wrapped:
+        dists = np.linalg.norm((anchors - xy + box_xy / 2) % box_xy - box_xy / 2, axis=1)
+        assigned_columns.append(np.argmin(dists))
+    assigned_columns = np.array(assigned_columns)
+
+    # Estimate average inter-column spacing r
+    nearest_dists = []
+    for i, a in enumerate(anchors):
+        dists = np.linalg.norm((anchors - a + box_xy / 2) % box_xy - box_xy / 2, axis=1)
+        dists[i] = np.inf
+        nearest_dists.append(np.min(dists))
+    r = np.mean(nearest_dists)
+
+    if verbose:
+        print(f"Average column spacing r = {r:.2f} A")
+
+    return assigned_columns, r
+
+
 def analysis(sim_dir):
     global frame_counter, last_global_spin_frame, molecule_last_spin_frame
 
@@ -51,13 +118,14 @@ def analysis(sim_dir):
         com_prev = sn.aa_cm()
 
         # cluster columns on previous frame
-        anchors_prev, labels_prev = (com_prev, box, return_noise=True)
-        assigned_columns, r = (com_prev, anchors_prev, box)
+        anchors_prev, labels_prev = guess_column_positions(com_prev, box, return_noise=True)
+        assigned_columns, r = assign_fragments_to_columns(com_prev, anchors_prev, box)
+
 
         # cluster latest frame
         sn.read_frame(latest)
         com_latest = sn.aa_cm()
-        anchors_latest, labels_latest = (com_latest, box, return_noise=True)
+        anchors_latest, labels_latest = guess_column_positions(com_latest, box, return_noise=True)
 
         spin_offs = []
         for i, label in enumerate(labels_latest):
