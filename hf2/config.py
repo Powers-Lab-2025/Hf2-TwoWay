@@ -53,6 +53,10 @@ HOP_DISTANCE_FACTOR = 0.4
 # Helps prevent computational overload from too many simultaneous branches
 MAX_SPINOFFS_PER_STEP = 2
 
+# How many frames back to compare against for hop detection
+# Instead of comparing to the immediately previous frame, compare to N frames ago
+HOP_REFERENCE_FRAMES_BACK = 4
+
 # =============================================================================
 # Cooldown Period Settings
 # =============================================================================

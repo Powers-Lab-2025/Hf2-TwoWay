@@ -6,6 +6,7 @@ from hf2.config import (
     ORIENT_FAIL_INTERVAL,
     HOP_CHECK_INTERVAL,
     HOP_DISTANCE_FACTOR,
+    HOP_REFERENCE_FRAMES_BACK,
     MAX_SPINOFFS_PER_STEP,
     COOLDOWN_GLOBAL,
     COOLDOWN_MOLECULE,
@@ -13,20 +14,41 @@ from hf2.config import (
 
 from sklearn.cluster import DBSCAN
 
-def guess_column_positions(coms, box, eps=2.0, min_samples=5, return_noise=False, verbose=False):
+def guess_column_positions(coms, box, n_molecules=600, n_columns=30, return_noise=False, verbose=False):
     """
-    Cluster XY COMs to find column centers.
+    Cluster XY COMs to find column centers using DBSCAN.
+    
+    Args:
+        coms: Center of mass coordinates
+        box: Simulation box dimensions
+        n_molecules: Expected number of molecules (for parameter tuning)
+        n_columns: Expected number of columns (for parameter tuning)
+        return_noise: Whether to return noise labels
+        verbose: Print diagnostic information
+    
     Returns: (anchors, labels)
     """
     xy_coords = coms[:2].T  # shape: (N, 2)
     box_xy = box[:2]
     xy_wrapped = xy_coords % box_xy
 
+    # Estimating column spacing from box size and number of columns
+    expected_column_spacing = min(box_xy) / np.sqrt(n_columns)
+    eps = expected_column_spacing * 0.3
+    molecules_per_column = n_molecules // n_columns
+    min_samples = max(5, molecules_per_column - 5)
+
+    if verbose:
+        print(f"DBSCAN parameters: eps={eps:.2f}, min_samples={min_samples}")
+        print(f"Expected column spacing: {expected_column_spacing:.2f}")
+
     db = DBSCAN(eps=eps, min_samples=min_samples).fit(xy_wrapped)
     labels = db.labels_
 
     if verbose:
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         n_noise = np.sum(labels == -1)
+        print(f"Found {n_clusters} columns, {n_noise} noise molecules")
         if n_noise > 0:
             print(f"{n_noise} out of {len(labels)} COMs were not assigned to any column.")
         else:
@@ -72,7 +94,7 @@ def assign_fragments_to_columns(coms, anchors, box, verbose=False):
     r = np.mean(nearest_dists)
 
     if verbose:
-        print(f"Average column spacing r = {r:.2f} A")
+        print(f"[ANALYSIS] Average column spacing r = {r:.2f} A")
 
     return assigned_columns, r
 
@@ -99,11 +121,11 @@ def analysis(sim_dir, path_state):
         and not f.name.endswith(".key")
     ], key=lambda f: f.stat().st_mtime)
 
-    if len(traj_files) < 2:
+    if len(traj_files) < HOP_REFERENCE_FRAMES_BACK + 1:
         return 4, "", ""
 
     latest = traj_files[-1]
-    previous = traj_files[-2]
+    reference = traj_files[-(HOP_REFERENCE_FRAMES_BACK + 1)]  # N frames back
     path_state.analysis_frame_counter += 1
 
     print(f"[ANALYSIS] Latest XYZ file: {latest}.")
@@ -111,7 +133,7 @@ def analysis(sim_dir, path_state):
     # Read latest frame
     sn.read_frame(latest)
     com_latest = sn.aa_cm()
-    box = sn.g.DIMS.copy()
+    box = sn.DIMS.copy()
 
     if path_state.analysis_frame_counter % ORIENT_FAIL_INTERVAL == 0:
         if sn.oriS() < 0.6:
@@ -133,21 +155,39 @@ def analysis(sim_dir, path_state):
         com_latest = sn.aa_cm()
         anchors_latest, labels_latest = guess_column_positions(com_latest, box, return_noise=True)
 
-        spin_offs = []
+        # Check for molecular hops
         for i, label in enumerate(labels_latest):
             if label == -1:
-                anchor = anchors_prev[assigned_columns[i]]
+                original_column_idx = assigned_columns[i]
+                original_anchor = anchors_ref[original_column_idx]
+
                 box_xy = box[:2]
-                dist = np.linalg.norm((com_latest[:2, i] - anchor + box_xy / 2) % box_xy - box_xy / 2)
+                dist = np.linalg.norm((com_latest[:2, i] - original_anchor + box_xy / 2) % box_xy - box_xy / 2)
 
                 if dist > HOP_DISTANCE_FACTOR * r:
-                    mol_id = i  # index is ID
+                    mol_id = i
                     last_spin = path_state.molecule_last_spin_frame.get(mol_id, -COOLDOWN_MOLECULE)
 
                     if path_state.analysis_frame_counter - last_spin >= COOLDOWN_MOLECULE:
                         frame_num = extract_frame_number(latest.name)
                         filename = f"{REF_XYZ_PREFIX}_m{mol_id}_t{frame_num}.dyn"
-                        logline = f"Spinoff: Mol {mol_id} hopped from column {assigned_columns[i]} at frame {frame_num} (dist={dist:.2f} Å)"
+                        
+                        target_anchor = None
+                        target_column_idx = None
+                        if len(anchors_latest) > 0:
+                            dists_to_current = np.linalg.norm(
+                                (anchors_latest - com_latest[:2, i] + box_xy / 2) % box_xy - box_xy / 2, 
+                                axis=1
+                            )
+                            target_column_idx = np.argmin(dists_to_current)
+                            target_anchor = anchors_latest[target_column_idx]
+                        
+                        original_pos_str = f"({original_anchor[0]:.2f}, {original_anchor[1]:.2f})"
+                        if target_anchor is not None:
+                            target_pos_str = f"({target_anchor[0]:.2f}, {target_anchor[1]:.2f})"
+                            logline = f"Spinoff: Mol {mol_id} hopped from column {original_column_idx} {original_pos_str} to near column {target_column_idx} {target_pos_str} at frame {frame_num} (dist={dist:.2f} Å)"
+                        else:
+                            logline = f"Spinoff: Mol {mol_id} hopped from column {original_column_idx} {original_pos_str} to unassigned position at frame {frame_num} (dist={dist:.2f} Å)"
 
                         path_state.last_global_spin_frame = path_state.analysis_frame_counter
                         path_state.molecule_last_spin_frame[mol_id] = path_state.analysis_frame_counter
