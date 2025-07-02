@@ -2,11 +2,11 @@ import os
 import time
 import shutil
 import numpy as np
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from hf2.analysis import analysis
 import hf2.config
-import subprocess
 
 class SimulationPath:
     def __init__(self, path, verbose=True):
@@ -15,9 +15,6 @@ class SimulationPath:
         self.label = self.path.name
         self.frame_counter = 0
         self.last_activity_time = time.time()
-        self.analysis_frame_counter = 0
-        self.last_global_spin_frame = -hf2.config.COOLDOWN_GLOBAL
-        self.molecule_last_spin_frame = {}
 
         if not (self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz").exists():
             raise FileNotFoundError(f"Missing reference xyz file: {hf2.config.REF_XYZ_PREFIX}.xyz")
@@ -28,21 +25,20 @@ class SimulationPath:
                   f"{hf2.config.TINKER_CONTROL_FLAGS} {hf2.config.TINKER_TEMP} 1 > " \
                   f"{hf2.config.TINKER_PREFIX}.{hf2.config.TINKER_RECORD_INDEX}.out"
         
+            if self.verbose:
+                print(f"[TINKER START] Running in {self.path}:\n  {cmd}")
+        
+            # Start TINKER as background process - don't wait for completion
             try:
-                result = subprocess.run(
-                    cmd, 
-                    shell=True, 
-                    cwd=self.path, 
-                    capture_output=True, 
-                    text=True,
-                    timeout=30
+                subprocess.Popen(
+                    cmd,
+                    shell=True,
+                    cwd=self.path,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
                 )
-                if result.returncode != 0:
-                    raise RuntimeError(f"TINKER failed to start: {result.stderr}")
                 if self.verbose:
-                    print(f"[TINKER START] Successfully started in {self.path}")
-            except subprocess.TimeoutExpired:
-                raise RuntimeError(f"TINKER startup timed out in {self.path}")
+                    print(f"[TINKER START] Successfully started TINKER process in {self.path}")
             except Exception as e:
                 raise RuntimeError(f"Failed to start TINKER in {self.path}: {e}")
         else:
@@ -82,7 +78,7 @@ class SimulationPath:
         Logs the logline and handles filename-based spinoffs.
         """
         try:
-            code, logline, filename = analysis(self.path, self)
+            code, logline, filename = analysis(self.path)
 
             if logline:
                 self._log_to_file(logline)
@@ -138,17 +134,24 @@ class SimulationPath:
         new_path.mkdir()
 
         # Identify files to copy
-        xyz_files = sorted(self.path.glob(f"{hf2.config.REF_XYZ_PREFIX}.*"), key=lambda f: f.stat().st_mtime)
+        ref_xyz_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz"
         key_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.key"
-        dyn_file = self.path / dyn_filename if dyn_filename else None
+        dyn_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.dyn"
+        log_file = self.path / "log.txt"
 
         to_copy = []
-        if xyz_files:
-            to_copy.append(xyz_files[-1])
-        if dyn_file and dyn_file.exists():
+        # Always copy the reference .xyz file
+        if ref_xyz_file.exists():
+            to_copy.append(ref_xyz_file)
+        # Copy the .dyn file
+        if dyn_file.exists():
             to_copy.append(dyn_file)
+        # Copy the .key file
         if key_file.exists():
             to_copy.append(key_file)
+        # Copy the log file
+        if log_file.exists():
+            to_copy.append(log_file)
 
         for f in to_copy:
             shutil.copy(f, new_path / f.name)

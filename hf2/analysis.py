@@ -111,7 +111,7 @@ def analysis(sim_dir, path_state):
     # Read latest frame
     sn.read_frame(latest)
     com_latest = sn.aa_cm()
-    box = sn.DIMS.copy()
+    box = sn.g.DIMS.copy()
 
     if path_state.analysis_frame_counter % ORIENT_FAIL_INTERVAL == 0:
         if sn.oriS() < 0.6:
