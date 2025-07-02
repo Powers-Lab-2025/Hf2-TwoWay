@@ -11,11 +11,6 @@ from hf2.config import (
     COOLDOWN_MOLECULE,
 )
 
-frame_counter = 0
-last_global_spin_frame = -COOLDOWN_GLOBAL
-molecule_last_spin_frame = {}  # mol_id -> last spin frame
-
-
 from sklearn.cluster import DBSCAN
 
 def guess_column_positions(coms, box, eps=2.0, min_samples=5, return_noise=False, verbose=False):
@@ -82,9 +77,17 @@ def assign_fragments_to_columns(coms, anchors, box, verbose=False):
     return assigned_columns, r
 
 
-def analysis(sim_dir):
-    global frame_counter, last_global_spin_frame, molecule_last_spin_frame
-
+def analysis(sim_dir, path_state):
+    """
+    Analysis function that uses path_state for per-path tracking instead of globals.
+    
+    Args:
+        sim_dir: Path to simulation directory
+        path_state: SimulationPath object containing state variables
+    
+    Returns:
+        tuple: (code, logline, filename)
+    """
     sim_dir = Path(sim_dir)
     traj_files = sorted([
         f for f in sim_dir.iterdir()
@@ -101,7 +104,7 @@ def analysis(sim_dir):
 
     latest = traj_files[-1]
     previous = traj_files[-2]
-    frame_counter += 1
+    path_state.analysis_frame_counter += 1
 
     print(f"[ANALYSIS] Latest XYZ file: {latest}.")
 
@@ -110,12 +113,12 @@ def analysis(sim_dir):
     com_latest = sn.aa_cm()
     box = sn.DIMS.copy()
 
-    if frame_counter % ORIENT_FAIL_INTERVAL == 0:
+    if path_state.analysis_frame_counter % ORIENT_FAIL_INTERVAL == 0:
         if sn.oriS() < 0.6:
             return 2, f"Failure: S < 0.6 at frame {extract_frame_number(latest.name)}", ""
 
-    if frame_counter % HOP_CHECK_INTERVAL == 0:
-        if frame_counter - last_global_spin_frame < COOLDOWN_GLOBAL:
+    if path_state.analysis_frame_counter % HOP_CHECK_INTERVAL == 0:
+        if path_state.analysis_frame_counter - path_state.last_global_spin_frame < COOLDOWN_GLOBAL:
             return 4, "", ""
 
         sn.read_frame(previous)
@@ -124,7 +127,6 @@ def analysis(sim_dir):
         # cluster columns on previous frame
         anchors_prev, labels_prev = guess_column_positions(com_prev, box, return_noise=True)
         assigned_columns, r = assign_fragments_to_columns(com_prev, anchors_prev, box)
-
 
         # cluster latest frame
         sn.read_frame(latest)
@@ -140,15 +142,15 @@ def analysis(sim_dir):
 
                 if dist > HOP_DISTANCE_FACTOR * r:
                     mol_id = i  # index is ID
-                    last_spin = molecule_last_spin_frame.get(mol_id, -COOLDOWN_MOLECULE)
+                    last_spin = path_state.molecule_last_spin_frame.get(mol_id, -COOLDOWN_MOLECULE)
 
-                    if frame_counter - last_spin >= COOLDOWN_MOLECULE:
+                    if path_state.analysis_frame_counter - last_spin >= COOLDOWN_MOLECULE:
                         frame_num = extract_frame_number(latest.name)
                         filename = f"{REF_XYZ_PREFIX}_m{mol_id}_t{frame_num}.dyn"
                         logline = f"Spinoff: Mol {mol_id} hopped from column {assigned_columns[i]} at frame {frame_num} (dist={dist:.2f} Å)"
 
-                        last_global_spin_frame = frame_counter
-                        molecule_last_spin_frame[mol_id] = frame_counter
+                        path_state.last_global_spin_frame = path_state.analysis_frame_counter
+                        path_state.molecule_last_spin_frame[mol_id] = path_state.analysis_frame_counter
                         return 1, logline, filename
 
         # If no valid spinoffs

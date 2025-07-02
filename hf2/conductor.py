@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 from hf2.analysis import analysis
 import hf2.config
+import subprocess
 
 class SimulationPath:
     def __init__(self, path, verbose=True):
@@ -14,6 +15,9 @@ class SimulationPath:
         self.label = self.path.name
         self.frame_counter = 0
         self.last_activity_time = time.time()
+        self.analysis_frame_counter = 0
+        self.last_global_spin_frame = -hf2.config.COOLDOWN_GLOBAL
+        self.molecule_last_spin_frame = {}
 
         if not (self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz").exists():
             raise FileNotFoundError(f"Missing reference xyz file: {hf2.config.REF_XYZ_PREFIX}.xyz")
@@ -24,10 +28,23 @@ class SimulationPath:
                   f"{hf2.config.TINKER_CONTROL_FLAGS} {hf2.config.TINKER_TEMP} 1 > " \
                   f"{hf2.config.TINKER_PREFIX}.{hf2.config.TINKER_RECORD_INDEX}.out"
         
-            if self.verbose:
-                print(f"[TINKER START] Running in {self.path}:\n  {cmd}")
-        
-            os.system(f"cd {self.path} && {cmd}")
+            try:
+                result = subprocess.run(
+                    cmd, 
+                    shell=True, 
+                    cwd=self.path, 
+                    capture_output=True, 
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"TINKER failed to start: {result.stderr}")
+                if self.verbose:
+                    print(f"[TINKER START] Successfully started in {self.path}")
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"TINKER startup timed out in {self.path}")
+            except Exception as e:
+                raise RuntimeError(f"Failed to start TINKER in {self.path}: {e}")
         else:
             if self.verbose:
                 print(f"[PASSIVE] Skipping TINKER startup in {self.label}")
@@ -65,7 +82,7 @@ class SimulationPath:
         Logs the logline and handles filename-based spinoffs.
         """
         try:
-            code, logline, filename = analysis(self.path)
+            code, logline, filename = analysis(self.path, self)
 
             if logline:
                 self._log_to_file(logline)
