@@ -1,3 +1,61 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "hf2"
+version = "0.4.1"
+description = "Steering framework for TINKER Forward Flux Sampling molecular dynamics simulations"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Alfredo Roman Jordan", email = "romaal05@gettysburg.edu"},
+    {name = "Mitch Powers", email = "mpowers@gettysburg.edu"}
+]
+maintainers = [
+    {name = "Alfredo Roman Jordan", email = "romaal05@gettysburg.edu"},
+    {name = "Mitch Powers", email = "mpowers@gettysburg.edu"}
+]
+keywords = ["molecular dynamics", "TINKER", "forward flux sampling", "simulation", "chemistry"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "scikit-learn",
+    "pathlib",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "black",
+    "flake8",
+    "mypy",
+]
+
+[project.urls]
+Homepage = "https://github.com/Powers-Lab-2025/Hf2"
+Repository = "https://github.com/Powers-Lab-2025/Hf2"
+Issues = "https://github.com/Powers-Lab-2025/Hf2/issues"
+Documentation = "https://github.com/Powers-Lab-2025/Hf2#readme"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hf2*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+hf2 = ["*.cfg", "*.ini"]
