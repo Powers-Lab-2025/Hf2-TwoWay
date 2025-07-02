@@ -1,169 +1,165 @@
-import os
 import numpy as np
 from pathlib import Path
-import MDAnalysis as mda
-import ar5 as ar
+import sn5 as sn
 from hf2.config import (
     REF_XYZ_PREFIX,
     ORIENT_FAIL_INTERVAL,
     HOP_CHECK_INTERVAL,
     HOP_DISTANCE_FACTOR,
     MAX_SPINOFFS_PER_STEP,
-    NORMALIZE_ATOM_NAMES,
+    COOLDOWN_GLOBAL,
+    COOLDOWN_MOLECULE,
 )
 
-frame_counter = 0
+from sklearn.cluster import DBSCAN
 
-def analysis(xyz_dir):
+def guess_column_positions(coms, box, eps=2.0, min_samples=5, return_noise=False, verbose=False):
     """
-    Main analysis entry point. Called by a conductor object to determine what action to take.
-    It performs several modular checks and returns an action code:
-    1 - Spin off
-    2 - Stop as failure
-    3 - Stop as success
-    4 - Continue
+    Cluster XY COMs to find column centers.
+    Returns: (anchors, labels)
     """
-    global frame_counter
-    xyz_dir = Path(xyz_dir)
-    traj_files = sorted(xyz_dir.glob("*converted.xyz"), key=os.path.getmtime)
+    xy_coords = coms[:2].T  # shape: (N, 2)
+    box_xy = box[:2]
+    xy_wrapped = xy_coords % box_xy
+
+    db = DBSCAN(eps=eps, min_samples=min_samples).fit(xy_wrapped)
+    labels = db.labels_
+
+    if verbose:
+        n_noise = np.sum(labels == -1)
+        if n_noise > 0:
+            print(f"{n_noise} out of {len(labels)} COMs were not assigned to any column.")
+        else:
+            print("All COMs assigned to columns.")
+
+    anchors = []
+    for label in sorted(set(labels)):
+        if label == -1:
+            continue
+        cluster_points = xy_wrapped[labels == label]
+        anchor = np.mean(cluster_points, axis=0)
+        anchors.append(anchor)
+
+    anchors = np.array(anchors)
+
+    if return_noise:
+        return anchors, labels
+    else:
+        return anchors
+
+
+def assign_fragments_to_columns(coms, anchors, box, verbose=False):
+    """
+    Assign each COM to its nearest anchor using periodic XY distance.
+    Returns (assigned_columns, r) where r is average inter-anchor spacing.
+    """
+    xy_coords = coms[:2].T  # shape: (N, 2)
+    box_xy = box[:2]
+    xy_wrapped = xy_coords % box_xy
+
+    assigned_columns = []
+    for xy in xy_wrapped:
+        dists = np.linalg.norm((anchors - xy + box_xy / 2) % box_xy - box_xy / 2, axis=1)
+        assigned_columns.append(np.argmin(dists))
+    assigned_columns = np.array(assigned_columns)
+
+    # Estimate average inter-column spacing r
+    nearest_dists = []
+    for i, a in enumerate(anchors):
+        dists = np.linalg.norm((anchors - a + box_xy / 2) % box_xy - box_xy / 2, axis=1)
+        dists[i] = np.inf
+        nearest_dists.append(np.min(dists))
+    r = np.mean(nearest_dists)
+
+    if verbose:
+        print(f"Average column spacing r = {r:.2f} A")
+
+    return assigned_columns, r
+
+
+def analysis(sim_dir, path_state):
+    """
+    Analysis function that uses path_state for per-path tracking instead of globals.
+    
+    Args:
+        sim_dir: Path to simulation directory
+        path_state: SimulationPath object containing state variables
+    
+    Returns:
+        tuple: (code, logline, filename)
+    """
+    sim_dir = Path(sim_dir)
+    traj_files = sorted([
+        f for f in sim_dir.iterdir()
+        if f.is_file()
+        and f.name.startswith(f"{REF_XYZ_PREFIX}.")
+        and len(f.suffixes) == 1
+        and f.suffix[1:].isdigit()
+        and not f.name.endswith(".dyn")
+        and not f.name.endswith(".key")
+    ], key=lambda f: f.stat().st_mtime)
+
     if len(traj_files) < 2:
-        return 4  # not enough frames to do anything
+        return 4, "", ""
 
-    frame_counter += 1
     latest = traj_files[-1]
     previous = traj_files[-2]
+    path_state.analysis_frame_counter += 1
 
-    u_latest = mda.Universe(str(latest), format="TXYZ")
-    u_prev = mda.Universe(str(previous), format="TXYZ")
+    print(f"[ANALYSIS] Latest XYZ file: {latest}.")
 
+    # Read latest frame
+    sn.read_frame(latest)
+    com_latest = sn.aa_cm()
+    box = sn.DIMS.copy()
 
-    frags_latest = list(u_latest.select_atoms("all").fragments)
-    frags_prev = list(u_prev.select_atoms("all").fragments)
+    if path_state.analysis_frame_counter % ORIENT_FAIL_INTERVAL == 0:
+        if sn.oriS() < 0.6:
+            return 2, f"Failure: S < 0.6 at frame {extract_frame_number(latest.name)}", ""
 
-    # Perform modular checks
-    if frame_counter % ORIENT_FAIL_INTERVAL == 0:
-        fail = check_failure(frags_latest)
-        if fail:
-            log_action("Failure: S < 0.6")
-            return 2
+    if path_state.analysis_frame_counter % HOP_CHECK_INTERVAL == 0:
+        if path_state.analysis_frame_counter - path_state.last_global_spin_frame < COOLDOWN_GLOBAL:
+            return 4, "", ""
 
-    if frame_counter % HOP_CHECK_INTERVAL == 0:
-        focus_result = check_focus(xyz_dir, frags_latest)
-        if focus_result is not None:
-            return focus_result
+        sn.read_frame(previous)
+        com_prev = sn.aa_cm()
 
-        spinoff_targets = check_hop(frags_latest, frags_prev, xyz_dir)
-        if spinoff_targets:
-            for frag_idx, dist, col in spinoff_targets:
-                write_focus_file(xyz_dir, frag_idx, col, dist)
-                log_action(f"Spinoff: Fragment {frag_idx} is {dist:.2f} A from column {col}")
-            return 1
+        # cluster columns on previous frame
+        anchors_prev, labels_prev = guess_column_positions(com_prev, box, return_noise=True)
+        assigned_columns, r = assign_fragments_to_columns(com_prev, anchors_prev, box)
 
-    return 4
+        # cluster latest frame
+        sn.read_frame(latest)
+        com_latest = sn.aa_cm()
+        anchors_latest, labels_latest = guess_column_positions(com_latest, box, return_noise=True)
 
+        spin_offs = []
+        for i, label in enumerate(labels_latest):
+            if label == -1:
+                anchor = anchors_prev[assigned_columns[i]]
+                box_xy = box[:2]
+                dist = np.linalg.norm((com_latest[:2, i] - anchor + box_xy / 2) % box_xy - box_xy / 2)
 
-def check_failure(frags):
-    """Returns True if orientational order parameter S < 0.6, indicating failure."""
-    S = ar.compute_orientational_order_parameter(frags, verbose=False)
-    return S < 0.6
+                if dist > HOP_DISTANCE_FACTOR * r:
+                    mol_id = i  # index is ID
+                    last_spin = path_state.molecule_last_spin_frame.get(mol_id, -COOLDOWN_MOLECULE)
 
+                    if path_state.analysis_frame_counter - last_spin >= COOLDOWN_MOLECULE:
+                        frame_num = extract_frame_number(latest.name)
+                        filename = f"{REF_XYZ_PREFIX}_m{mol_id}_t{frame_num}.dyn"
+                        logline = f"Spinoff: Mol {mol_id} hopped from column {assigned_columns[i]} at frame {frame_num} (dist={dist:.2f} Å)"
 
+                        path_state.last_global_spin_frame = path_state.analysis_frame_counter
+                        path_state.molecule_last_spin_frame[mol_id] = path_state.analysis_frame_counter
+                        return 1, logline, filename
 
-def write_focus_file(xyz_dir, mol_index, col, dist, anchor_xy):
-    """Creates molecule.focus in the NEW spinoff directory with metadata."""
-    focus_dir = xyz_dir.parent / "spinoffs"
-    if hf2.config.NESTED_SPINOFF_DIRS and hf2.config.PASSIVE_MODE:
-        spinoff_dirs = sorted(focus_dir.glob("*/"), key=os.path.getmtime)
-        if spinoff_dirs:
-            newest_dir = spinoff_dirs[-1]
-            focus_path = newest_dir / "molecule.focus"
-        else:
-            focus_path = xyz_dir.parent / "molecule.focus"
-    else:
-        focus_path = xyz_dir.parent / "molecule.focus"
+        # If no valid spinoffs
+        return 4, "", ""
 
-    with open(focus_path, "w") as f:
-        f.write(
-            f"fragment_index: {mol_index}\n"
-            f"old_column: {col}\n"
-            f"distance_from_anchor: {dist:.2f}\n"
-            f"anchor_x: {anchor_xy[0]:.2f}\n"
-            f"anchor_y: {anchor_xy[1]:.2f}\n"
-            f"frame: {frame_counter}\n"
-        )
+    return 4, "", ""
 
-
-def check_hop(frags_latest, frags_prev, xyz_dir):
-    """Returns a list of molecules that meet hop criteria for spinoff."""
-    coms_prev = np.array([frag.center_of_mass() for frag in frags_prev])
-    coms_latest = np.array([frag.center_of_mass() for frag in frags_latest])
-    box = frags_latest[0].dimensions[:3]
-
-    anchors_prev, labels_prev = ar.guess_column_positions(coms_prev, box, return_noise=True)
-    assigned_columns, r = ar.assign_fragments_to_columns(coms_prev, anchors_prev, box)
-
-    anchors_latest, labels_latest = ar.guess_column_positions(coms_latest, box, return_noise=True)
-
-    spin_offs = []
-    for i, label in enumerate(labels_latest):
-        if label == -1:
-            com = coms_latest[i]
-            anchor = anchors_prev[assigned_columns[i]]
-            box_xy = box[:2]
-            dist = np.linalg.norm((com[:2] - anchor + box_xy / 2) % box_xy - box_xy / 2)
-            if dist > HOP_DISTANCE_FACTOR * r:
-                spin_offs.append((i, dist, assigned_columns[i], anchor))
-
-    spin_offs.sort(key=lambda x: -x[1])
-    return spin_offs[:MAX_SPINOFFS_PER_STEP]
-
-
-def check_focus(xyz_dir, frags):
-    """Checks if a tracked molecule completed a hop or failed."""
-    focus_file = xyz_dir.parent / "molecule.focus"
-    if not focus_file.exists():
-        return None
-
-    metadata = {}
-    with open(focus_file) as f:
-        for line in f:
-            k, v = line.strip().split(":")
-            metadata[k.strip()] = float(v.strip())
-
-    mol_index = int(metadata["fragment_index"])
-    orig_col = int(metadata["old_column"])
-    orig_dist = float(metadata["distance_from_anchor"])
-    anchor_xy = np.array([metadata["anchor_x"], metadata["anchor_y"]])
-
-    coms = np.array([frag.center_of_mass() for frag in frags])
-    box = frags[0].dimensions[:3]
-    anchors, _ = ar.guess_column_positions(coms, box, return_noise=False)
-    assigned_columns, r = ar.assign_fragments_to_columns(coms, anchors, box)
-    current_col = assigned_columns[mol_index]
-
-    box_xy = box[:2]
-    dist = np.linalg.norm((coms[mol_index][:2] - anchor_xy + box_xy / 2) % box_xy - box_xy / 2)
-
-    if current_col != orig_col:
-        log_action(f"Success: Molecule {mol_index} hopped from {orig_col} to {current_col}")
-        return 3
-    elif dist > orig_dist:
-        log_action(f"Re-spinoff: Molecule {mol_index} now {dist:.2f} A from column {orig_col}")
-        return 1
-    elif dist < r * HOP_DISTANCE_FACTOR:
-        log_action(f"Failed hop: Molecule {mol_index} returned to home column {orig_col}")
-        return 2
-
-    return None
-
-
-
-
-def log_action(text):
-    """Appends action text to log.txt with timestamp."""
-    with open("log.txt", "a") as log:
-        log.write(f"[{current_timestamp()}] {text}\n")
-
-
-def current_timestamp():
-    return str(np.datetime64('now')).replace("T", " ")
+def extract_frame_number(filename):
+    parts = filename.split(".")
+    if len(parts) > 1 and parts[-1].isdigit():
+        return f"{int(parts[-1]):05d}"
+    return "00000"
