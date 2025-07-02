@@ -24,12 +24,6 @@ SPINOFF_COPY_MODE = "minimal" # What files to copy into spinoff: options are "al
 # Prefix used to identify the reference .xyz file (e.g., "F7_ramp_original.xyz")
 REF_XYZ_PREFIX = "F8_ramp"
 
-# Subdirectory inside each simulation path where converted .xyz files are stored
-XYZ_SUBDIR = "XYZs"
-
-# Suffix that identifies .dyn files
-DYN_SUFFIX = ".dyn"
-
 
 # --------------------------------------------------
 # TINKER Simulation Configuration

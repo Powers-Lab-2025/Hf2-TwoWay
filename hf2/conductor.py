@@ -1,6 +1,7 @@
 import os
 import time
 import shutil
+import numpy as np
 from pathlib import Path
 from datetime import datetime
 from hf2.analysis import analysis
@@ -11,9 +12,8 @@ class SimulationPath:
         self.path = Path(path).resolve()
         self.verbose = verbose
         self.label = self.path.name
-        self.last_dyn_mtime = None
-        self.last_converted = None
         self.frame_counter = 0
+        self.last_activity_time = time.time()
 
         if not (self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz").exists():
             raise FileNotFoundError(f"Missing reference xyz file: {hf2.config.REF_XYZ_PREFIX}.xyz")
@@ -32,25 +32,32 @@ class SimulationPath:
             if self.verbose:
                 print(f"[PASSIVE] Skipping TINKER startup in {self.label}")
 
+    def check_for_new_frames(self):
+        """Check for new .xyz frames and update activity time"""
+        xyz_files = sorted([
+            f for f in self.path.iterdir()
+            if f.is_file()
+            and f.name.startswith(f"{hf2.config.REF_XYZ_PREFIX}.")
+            and len(f.suffixes) == 1
+            and f.suffix[1:].isdigit()
+            and not f.name.endswith(".dyn")
+            and not f.name.endswith(".key")
+        ], key=lambda f: f.stat().st_mtime)
+        
+        if xyz_files:
+            latest_mtime = xyz_files[-1].stat().st_mtime
+            if not hasattr(self, 'last_frame_mtime') or latest_mtime > self.last_frame_mtime:
+                self.last_frame_mtime = latest_mtime
+                self.last_activity_time = time.time()
+                self.frame_counter += 1
+                if self.verbose:
+                    print(f"[MONITOR] Detected new XYZ frame: {xyz_files[-1].name}")
+                return True
+        return False
 
-    def monitor_and_convert(self):
-        """
-        Detects if a new frame was written by checking .xyz files (e.g., F8_ramp.001, F8_ramp.002).
-        Sets self.frame_counter and self.last_converted accordingly.
-        """
-        pattern = f"{hf2.config.REF_XYZ_PREFIX}.*"
-        xyz_files = sorted(self.path.glob(pattern), key=lambda f: f.stat().st_mtime)
-        if not xyz_files:
-            return
-    
-        latest_xyz = xyz_files[-1]
-        mtime = latest_xyz.stat().st_mtime
-    
-        if self.last_converted is None or mtime > self.last_converted.stat().st_mtime:
-            self.last_converted = latest_xyz
-            self.frame_counter += 1
-            if self.verbose:
-                print(f"[MONITOR] Detected new XYZ frame: {latest_xyz.name}")
+    def is_inactive(self):
+        """Check if TINKER has been inactive too long"""
+        return time.time() - self.last_activity_time > hf2.config.TINKER_INACTIVITY_TIMEOUT
 
     def run_analysis(self):
         """
@@ -167,8 +174,20 @@ class SimulationPath:
             print(f"[CONTINUE] {self.label} continuing without changes.")
 
     def update(self):
-        self.monitor_and_convert()
-        return self.run_analysis()
+        # Check for new frames first
+        has_new_frame = self.check_for_new_frames()
+        
+        # Check for inactivity
+        if self.is_inactive():
+            self._log_to_file(f"[TIMEOUT] No new frames for {hf2.config.TINKER_INACTIVITY_TIMEOUT}s")
+            if self.verbose:
+                print(f"[TIMEOUT] {self.label} inactive, stopping")
+            return False  # Signal to remove this path
+            
+        # Only run analysis if there's a new frame
+        if has_new_frame:
+            return self.run_analysis()
+        return True  # Continue running
 
     def _log_to_file(self, text):
         log_path = self.path / "log.txt"

@@ -6,7 +6,6 @@ analysis, and manage simulation branching behavior.
 
 from .conductor import SimulationPath
 from .coordinator import SimulationManager
-from .conversion import convert_dyn_to_xyz
 from .analysis import analysis
 
 __all__ = [
