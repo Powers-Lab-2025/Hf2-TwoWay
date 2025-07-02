@@ -2,7 +2,6 @@ import os
 import time
 import shutil
 import numpy as np
-import subprocess
 from pathlib import Path
 from datetime import datetime
 from hf2.analysis import analysis
@@ -15,35 +14,17 @@ class SimulationPath:
         self.label = self.path.name
         self.frame_counter = 0
         self.last_activity_time = time.time()
+        
+        # Add analysis state tracking
+        self.analysis_frame_counter = 0
+        self.last_global_spin_frame = -hf2.config.COOLDOWN_GLOBAL
+        self.molecule_last_spin_frame = {}
 
         if not (self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz").exists():
             raise FileNotFoundError(f"Missing reference xyz file: {hf2.config.REF_XYZ_PREFIX}.xyz")
 
-        if not hf2.config.PASSIVE_MODE:
-            cmd = f"{hf2.config.TINKER_BINARY} {hf2.config.TINKER_PREFIX} {hf2.config.TINKER_NUM_STEPS} " \
-                  f"{hf2.config.TINKER_TIMESTEP_FS} {hf2.config.TINKER_SNAPSHOT_INTERVAL_PS} " \
-                  f"{hf2.config.TINKER_CONTROL_FLAGS} {hf2.config.TINKER_TEMP} 1 > " \
-                  f"{hf2.config.TINKER_PREFIX}.{hf2.config.TINKER_RECORD_INDEX}.out"
-        
-            if self.verbose:
-                print(f"[TINKER START] Running in {self.path}:\n  {cmd}")
-        
-            # Start TINKER as background process - don't wait for completion
-            try:
-                subprocess.Popen(
-                    cmd,
-                    shell=True,
-                    cwd=self.path,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                if self.verbose:
-                    print(f"[TINKER START] Successfully started TINKER process in {self.path}")
-            except Exception as e:
-                raise RuntimeError(f"Failed to start TINKER in {self.path}: {e}")
-        else:
-            if self.verbose:
-                print(f"[PASSIVE] Skipping TINKER startup in {self.label}")
+        if self.verbose:
+            print(f"[PASSIVE] Monitoring {self.label} in passive mode")
 
     def check_for_new_frames(self):
         """Check for new .xyz frames and update activity time"""
@@ -158,14 +139,7 @@ class SimulationPath:
 
         if self.verbose:
             print(f"[SPINOFF] Created {new_label} with {len(to_copy)} files")
-
-        if hf2.config.PASSIVE_MODE:
-            if self.verbose:
-                print(f"[PASSIVE] {new_label} created but not started (passive mode ON)")
-        else:
-            if self.verbose:
-                print(f"[SPINOFF] Launching new TINKER instance in {new_label}")
-            os.system(hf2.config.TINKER_START_COMMAND.format(path=new_path))
+            print(f"[PASSIVE] {new_label} created in passive mode - manual TINKER startup required")
 
     def stop_as_failed(self):
         new_name = self.label.replace("A", "X", 1)
