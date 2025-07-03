@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hf2"
-version = "0.4.1"
+name = "hf2hw"
+version = "0.1"
 description = "Steering framework for TINKER Forward Flux Sampling molecular dynamics simulations"
 readme = "README.md"
 license = {text = "MIT"}
@@ -54,7 +54,7 @@ Documentation = "https://github.com/Powers-Lab-2025/Hf2#readme"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["hf2*"]
+include = ["hf2hw*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
