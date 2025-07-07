@@ -259,9 +259,9 @@ def analysis(sim_dir, path_state):
                         original_pos_str = f"({original_anchor[0]:.2f}, {original_anchor[1]:.2f})"
                         if target_anchor is not None:
                             target_pos_str = f"({target_anchor[0]:.2f}, {target_anchor[1]:.2f})"
-                            logline = f"Spinoff: Mol {mol_id+1} hopped from column {original_column_idx} {original_pos_str} to near column {target_column_idx} {target_pos_str} at frame {frame_num} (dist={dist:.2f} Å)"
+                            logline = f"{mol_id+1}, {original_column_idx}, {original_pos_str}, {target_column_idx}, {target_pos_str}, {frame_num}, {dist:.2f}"
                         else:
-                            logline = f"Spinoff: Mol {mol_id+1} hopped from column {original_column_idx} {original_pos_str} to unassigned position at frame {frame_num} (dist={dist:.2f} Å)"
+                            logline = f"{mol_id+1}, {original_column_idx}, {original_pos_str}, {frame_num}, {dist:.2f}"
 
                         path_state.last_global_spin_frame = path_state.analysis_frame_counter
                         path_state.molecule_last_spin_frame[mol_id] = path_state.analysis_frame_counter
