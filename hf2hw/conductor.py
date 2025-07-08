@@ -14,8 +14,7 @@ class SimulationPath:
         self.label = self.path.name
         self.frame_counter = 0
         self.last_activity_time = time.time()
-        
-        # Add analysis state tracking
+
         self.analysis_frame_counter = 0
         self.last_global_spin_frame = -hf2.config.COOLDOWN_GLOBAL
         self.molecule_last_spin_frame = {}
@@ -59,7 +58,7 @@ class SimulationPath:
         Logs the logline and handles filename-based spinoffs.
         """
         try:
-            code, logline, filename = analysis(self.path)
+            code, logline, filename = analysis(self.path, self)
 
             if logline:
                 self._log_to_file(logline)
@@ -114,23 +113,22 @@ class SimulationPath:
         new_path = spinoff_root / new_label
         new_path.mkdir()
 
-        # Identify files to copy
         ref_xyz_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz"
         key_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.key"
         dyn_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.dyn"
         log_file = self.path / "log.txt"
 
         to_copy = []
-        # Always copy the reference .xyz file
+
         if ref_xyz_file.exists():
             to_copy.append(ref_xyz_file)
-        # Copy the .dyn file
+
         if dyn_file.exists():
             to_copy.append(dyn_file)
-        # Copy the .key file
+
         if key_file.exists():
             to_copy.append(key_file)
-        # Copy the log file
+
         if log_file.exists():
             to_copy.append(log_file)
 
@@ -148,12 +146,34 @@ class SimulationPath:
         if self.verbose:
             print(f"[STOP] {self.label} marked as failed (X).")
 
+        new_path = self.path.parent / new_name
+        try:
+            self.path.rename(new_path)
+            self.path = new_path
+            self.label = new_name
+            if self.verbose:
+                print(f"[RENAME] Directory renamed to {new_name}")
+        except Exception as e:
+            if self.verbose:
+                print(f"[RENAME] Failed to rename directory: {e}")
+
     def stop_as_success(self):
         new_name = self.label.replace("A", "V", 1)
         self._rename_and_stop(new_name)
         self._log_to_file(f"[STOP] {self.label} marked as success (V).")
         if self.verbose:
             print(f"[STOP] {self.label} marked as success (V).")
+
+        new_path = self.path.parent / new_name
+        try:
+            self.path.rename(new_path)
+            self.path = new_path
+            self.label = new_name
+            if self.verbose:
+                print(f"[RENAME] Directory renamed to {new_name}")
+        except Exception as e:
+            if self.verbose:
+                print(f"[RENAME] Failed to rename directory: {e}")
 
     def _rename_and_stop(self, new_name):
         prefix = hf2.config.TINKER_PREFIX
@@ -168,20 +188,24 @@ class SimulationPath:
             print(f"[CONTINUE] {self.label} continuing without changes.")
 
     def update(self):
-        # Check for new frames first
+
+        current_name = self.path.name
+        if 'X' in current_name or 'V' in current_name:
+            if self.verbose:
+                print(f"[STOP] Path {current_name} already marked as finished, stopping monitoring")
+            return False
+
         has_new_frame = self.check_for_new_frames()
         
-        # Check for inactivity
         if self.is_inactive():
             self._log_to_file(f"[TIMEOUT] No new frames for {hf2.config.TINKER_INACTIVITY_TIMEOUT}s")
             if self.verbose:
                 print(f"[TIMEOUT] {self.label} inactive, stopping")
-            return False  # Signal to remove this path
+            return False
             
-        # Only run analysis if there's a new frame
         if has_new_frame:
             return self.run_analysis()
-        return True  # Continue running
+        return True\
 
     def _log_to_file(self, text):
         log_path = self.path / "log.txt"
