@@ -57,6 +57,8 @@ MAX_SPINOFFS_PER_STEP = 2
 # Instead of comparing to the immediately previous frame, compare to N frames ago
 HOP_REFERENCE_FRAMES_BACK = 4
 
+PASSIVE_MODE = True
+
 # =============================================================================
 # Cooldown Period Settings
 # =============================================================================

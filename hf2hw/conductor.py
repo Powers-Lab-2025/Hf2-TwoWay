@@ -188,6 +188,19 @@ class SimulationPath:
             print(f"[CONTINUE] {self.label} continuing without changes.")
 
     def update(self):
+        if not self.path.exists():
+            if self.verbose:
+                print(f"[EXTERNAL] Path {self.label} no longer exists (externally removed/renamed)")
+            return False
+
+        current_parent = self.path.parent
+        for pattern in ['X', 'V']:
+            potential_new_name = self.label.replace('A', pattern, 1)
+            potential_new_path = current_parent / potential_new_name
+            if potential_new_path.exists() and not self.path.exists():
+                if self.verbose:
+                    print(f"[EXTERNAL] Detected external rename: {self.label} -> {potential_new_name}")
+                return False
 
         current_name = self.path.name
         if 'X' in current_name or 'V' in current_name:
@@ -205,9 +218,13 @@ class SimulationPath:
             
         if has_new_frame:
             return self.run_analysis()
-        return True\
+        return True
 
     def _log_to_file(self, text):
+        # Only log if the directory still exists
+        if not self.path.exists():
+            return
+            
         log_path = self.path / "log.txt"
         timestamp = str(np.datetime64('now')).replace("T", " ")
         with open(log_path, "a") as log:
