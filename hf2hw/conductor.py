@@ -117,6 +117,7 @@ class SimulationPath:
         key_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.key"
         dyn_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.dyn"
         log_file = self.path / "log.txt"
+        frame_xyz_file = self.path/f"{hf2.config.REF_XYZ_PREFIX}.{self.frame_counter}"
 
         to_copy = []
 
@@ -131,6 +132,9 @@ class SimulationPath:
 
         if log_file.exists():
             to_copy.append(log_file)
+
+        if frame_xyz_file.exists():
+            to_copy.append(frame_xyz_file)
 
         for f in to_copy:
             shutil.copy(f, new_path / f.name)
