@@ -71,3 +71,20 @@ COOLDOWN_GLOBAL = 5
 # Per-molecule cooldown: minimum frames to wait before the same molecule can spinoff again
 # Prevents a single molecule from creating too many branches
 COOLDOWN_MOLECULE = 20
+
+# =============================================================================
+# Auto-launch Settings
+# =============================================================================
+
+# Minimum number of active simulations to maintain per direction
+MIN_ACTIVE_SIMULATIONS = 4
+
+# TINKER command to execute when launching new simulations
+# Use {prefix} as a placeholder for the actual prefix (e.g., F8_ramp_fro)
+# Example: "dynamic {prefix} 1000000 0.5 1 1"
+TINKER_COMMAND = "dynamic {prefix} 1000000 0.5 1 1"
+
+# Template directory containing initial files for new simulations
+# Should contain {prefix}_fro.xyz, .key, .dyn for forward direction
+# and {prefix}_to.xyz, .key, .dyn for backward direction
+TEMPLATE_DIR = "./templates"
