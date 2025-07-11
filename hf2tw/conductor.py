@@ -4,8 +4,8 @@ import shutil
 import numpy as np
 from pathlib import Path
 from datetime import datetime
-from hf2.analysis import analysis
-import hf2.config
+from hf2tw.analysis import analysis
+import hf2tw.config
 
 class SimulationPath:
     def __init__(self, path, verbose=True):
@@ -16,21 +16,27 @@ class SimulationPath:
         self.last_activity_time = time.time()
 
         self.analysis_frame_counter = 0
-        self.last_global_spin_frame = -hf2.config.COOLDOWN_GLOBAL
-        self.molecule_last_spin_frame = {}
+        
+        self.direction = None
+        if self.path.parent.name in ['fro', 'to']:
+            self.direction = self.path.parent.name
+            
+        self.prefix = f"{hf2tw.config.REF_XYZ_PREFIX}_{self.direction}"
+        
+        self.molecule_displacement_frames = {}
 
-        if not (self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz").exists():
-            raise FileNotFoundError(f"Missing reference xyz file: {hf2.config.REF_XYZ_PREFIX}.xyz")
+        if not (self.path / f"{self.prefix}.xyz").exists():
+            raise FileNotFoundError(f"Missing reference xyz file: {self.prefix}.xyz")
 
         if self.verbose:
-            print(f"[PASSIVE] Monitoring {self.label} in passive mode")
+            direction_str = f" [{self.direction}]" if self.direction else ""
+            print(f"[PASSIVE] Monitoring {self.label}{direction_str} in passive mode")
 
     def check_for_new_frames(self):
-        """Check for new .xyz frames and update activity time"""
         xyz_files = sorted([
             f for f in self.path.iterdir()
             if f.is_file()
-            and f.name.startswith(f"{hf2.config.REF_XYZ_PREFIX}.")
+            and f.name.startswith(f"{self.prefix}.")
             and len(f.suffixes) == 1
             and f.suffix[1:].isdigit()
             and not f.name.endswith(".dyn")
@@ -49,24 +55,19 @@ class SimulationPath:
         return False
 
     def is_inactive(self):
-        """Check if TINKER has been inactive too long"""
-        return time.time() - self.last_activity_time > hf2.config.TINKER_INACTIVITY_TIMEOUT
+        return time.time() - self.last_activity_time > hf2tw.config.TINKER_INACTIVITY_TIMEOUT
 
     def run_analysis(self):
-        """
-        Calls user-defined analysis() and dispatches the result.
-        Logs the logline and handles filename-based spinoffs.
-        """
         try:
-            code, logline, filename = analysis(self.path, self)
+            code, logline, _ = analysis(self.path, self)
 
             if logline:
                 self._log_to_file(logline)
 
             if self.verbose:
-                print(f"[ANALYSIS] Path {self.label} returned: code={code}, filename={filename}")
+                print(f"[ANALYSIS] Path {self.label} returned: code={code}")
 
-            return self.take_action(code, filename)
+            return self.take_action(code)
 
         except Exception as e:
             err_msg = f"[ERROR] Analysis failed for {self.label}: {e}"
@@ -75,11 +76,8 @@ class SimulationPath:
                 print(err_msg)
             return True
 
-    def take_action(self, action_code, filename=""):
-        if action_code == 1:
-            self.spin_off(filename)
-            return True
-        elif action_code == 2:
+    def take_action(self, action_code):
+        if action_code == 2:
             self.stop_as_failed()
             return False
         elif action_code == 3:
@@ -93,62 +91,13 @@ class SimulationPath:
                 print(f"[ACTION] Unknown or no-op action ({action_code}) for {self.label}")
             return True
 
-    def spin_off(self, dyn_filename):
-        """
-        Creates a new simulation path directory using the given .dyn filename,
-        the latest .xyz, and .key file.
-        """
-        base_name = self.label
-
-        if hf2.config.PASSIVE_MODE and hf2.config.NESTED_SPINOFF_DIRS:
-            spinoff_root = self.path / "spinoffs"
-            spinoff_root.mkdir(exist_ok=True)
-        else:
-            spinoff_root = self.path.parent
-
-        siblings = [d.name for d in spinoff_root.iterdir() if d.is_dir() and d.name.startswith(base_name + "-")]
-        suffixes = [int(d.split("-")[-1]) for d in siblings if d.split("-")[-1].isdigit()]
-        new_suffix = max(suffixes + [0]) + 1
-        new_label = f"{base_name}-{new_suffix}"
-        new_path = spinoff_root / new_label
-        new_path.mkdir()
-
-        ref_xyz_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.xyz"
-        key_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.key"
-        dyn_file = self.path / f"{hf2.config.REF_XYZ_PREFIX}.dyn"
-        log_file = self.path / "log.txt"
-        frame_xyz_file = self.path/f"{hf2.config.REF_XYZ_PREFIX}.{self.frame_counter}"
-
-        to_copy = []
-
-        if ref_xyz_file.exists():
-            to_copy.append(ref_xyz_file)
-
-        if dyn_file.exists():
-            to_copy.append(dyn_file)
-
-        if key_file.exists():
-            to_copy.append(key_file)
-
-        if log_file.exists():
-            to_copy.append(log_file)
-
-        if frame_xyz_file.exists():
-            to_copy.append(frame_xyz_file)
-
-        for f in to_copy:
-            shutil.copy(f, new_path / f.name)
-
-        if self.verbose:
-            print(f"[SPINOFF] Created {new_label} with {len(to_copy)} files")
-            print(f"[PASSIVE] {new_label} created in passive mode - manual TINKER startup required")
-
     def stop_as_failed(self):
         new_name = self.label.replace("A", "X", 1)
-        self._rename_and_stop(new_name)
+        self._create_stop_file()
         self._log_to_file(f"[STOP] {self.label} marked as failed (X).")
         if self.verbose:
-            print(f"[STOP] {self.label} marked as failed (X).")
+            direction_str = f" [{self.direction}]" if self.direction else ""
+            print(f"[STOP] {self.label}{direction_str} marked as failed (X).")
 
         new_path = self.path.parent / new_name
         try:
@@ -163,10 +112,11 @@ class SimulationPath:
 
     def stop_as_success(self):
         new_name = self.label.replace("A", "V", 1)
-        self._rename_and_stop(new_name)
+        self._create_stop_file()
         self._log_to_file(f"[STOP] {self.label} marked as success (V).")
         if self.verbose:
-            print(f"[STOP] {self.label} marked as success (V).")
+            direction_str = f" [{self.direction}]" if self.direction else ""
+            print(f"[STOP] {self.label}{direction_str} marked as success (V).")
 
         new_path = self.path.parent / new_name
         try:
@@ -179,17 +129,16 @@ class SimulationPath:
             if self.verbose:
                 print(f"[RENAME] Failed to rename directory: {e}")
 
-    def _rename_and_stop(self, new_name):
-        prefix = hf2.config.TINKER_PREFIX
-        stop_file = self.path / f"{prefix}.end"
+    def _create_stop_file(self):
+        stop_file = self.path / f"{self.prefix}.end"
         stop_file.touch()
-
         if self.verbose:
             print(f"[TINKER STOP] Created stop file: {stop_file}")
 
     def continue_running(self):
         if self.verbose:
-            print(f"[CONTINUE] {self.label} continuing without changes.")
+            direction_str = f" [{self.direction}]" if self.direction else ""
+            print(f"[CONTINUE] {self.label}{direction_str} continuing without changes.")
 
     def update(self):
         if not self.path.exists():
@@ -215,7 +164,7 @@ class SimulationPath:
         has_new_frame = self.check_for_new_frames()
         
         if self.is_inactive():
-            self._log_to_file(f"[TIMEOUT] No new frames for {hf2.config.TINKER_INACTIVITY_TIMEOUT}s")
+            self._log_to_file(f"[TIMEOUT] No new frames for {hf2tw.config.TINKER_INACTIVITY_TIMEOUT}s")
             if self.verbose:
                 print(f"[TIMEOUT] {self.label} inactive, stopping")
             return False
@@ -225,7 +174,6 @@ class SimulationPath:
         return True
 
     def _log_to_file(self, text):
-        # Only log if the directory still exists
         if not self.path.exists():
             return
             

@@ -1,33 +1,19 @@
 import numpy as np
 from pathlib import Path
 import sn5 as sn
-from hf2.config import (
+from hf2tw.config import (
     REF_XYZ_PREFIX,
     ORIENT_FAIL_INTERVAL,
-    HOP_CHECK_INTERVAL,
-    HOP_DISTANCE_FACTOR,
-    HOP_REFERENCE_FRAMES_BACK,
-    MAX_SPINOFFS_PER_STEP,
-    COOLDOWN_GLOBAL,
-    COOLDOWN_MOLECULE,
 )
 
 
 def pbc_distance(pos1, pos2, box_dims):
-    """
-    Calculate minimum image distance between two positions considering periodic boundary conditions.
-    Box goes from -dim/2 to dim/2.
-    """
     delta = pos1 - pos2
     delta = delta - box_dims * np.round(delta / box_dims)
     return np.linalg.norm(delta)
 
 
 def pbc_displacement(pos1, pos2, box_dims):
-    """
-    Calculate displacement vector from pos2 to pos1 with PBC.
-    Box goes from -dim/2 to dim/2.
-    """
     delta = pos1 - pos2
     delta = delta - box_dims * np.round(delta / box_dims)
     return delta
@@ -37,10 +23,6 @@ from scipy.stats import halfnorm
 
 
 def simple_column_clustering(coms, box, n_columns=30, threshold=0.1, max_iter=100, verbose=False):
-    """
-    Simple clustering to find column centers.
-    Returns: (anchors, labels) where labels[i] = -1 for outliers
-    """
     xy_coords = coms[:2].T
     box_xy = box[:2]
     n_molecules = xy_coords.shape[0]
@@ -139,10 +121,6 @@ def simple_column_clustering(coms, box, n_columns=30, threshold=0.1, max_iter=10
 
 
 def assign_fragments_to_columns(coms, anchors, box, verbose=False):
-    """
-    Assign each COM to its nearest anchor using periodic XY distance.
-    Returns (assigned_columns, r) where r is average inter-anchor spacing.
-    """
     xy_coords = coms[:2].T
     box_xy = box[:2]
     
@@ -178,32 +156,23 @@ def assign_fragments_to_columns(coms, anchors, box, verbose=False):
 
 
 def analysis(sim_dir, path_state):
-    """
-    Analysis function that uses path_state for per-path tracking instead of globals.
-    
-    Args:
-        sim_dir: Path to simulation directory
-        path_state: SimulationPath object containing state variables
-    
-    Returns:
-        tuple: (code, logline, filename)
-    """
     sim_dir = Path(sim_dir)
+    prefix = path_state.prefix
+    
     traj_files = sorted([
         f for f in sim_dir.iterdir()
         if f.is_file()
-        and f.name.startswith(f"{REF_XYZ_PREFIX}.")
+        and f.name.startswith(f"{prefix}.")
         and len(f.suffixes) == 1
         and f.suffix[1:].isdigit()
         and not f.name.endswith(".dyn")
         and not f.name.endswith(".key")
     ], key=lambda f: f.stat().st_mtime)
 
-    if len(traj_files) < HOP_REFERENCE_FRAMES_BACK + 1:
+    if len(traj_files) < 1:
         return 4, "", ""
 
     latest = traj_files[-1]
-    reference = traj_files[-(HOP_REFERENCE_FRAMES_BACK + 1)]
     path_state.analysis_frame_counter += 1
 
     print(f"[ANALYSIS] Latest XYZ file: {latest}.")
@@ -216,58 +185,29 @@ def analysis(sim_dir, path_state):
         if sn.oriS() < 0.6:
             return 2, f"Failure: S < 0.6 at frame {extract_frame_number(latest.name)}", ""
 
-    if path_state.analysis_frame_counter % HOP_CHECK_INTERVAL == 0:
-        if path_state.analysis_frame_counter - path_state.last_global_spin_frame < COOLDOWN_GLOBAL:
-            return 4, "", ""
-
-        sn.read_frame(reference)
-        com_ref = sn.aa_cm()
-
-        anchors_ref, labels_ref = simple_column_clustering(com_ref, box, n_columns=30, verbose=False)
-        assigned_columns_ref, r = assign_fragments_to_columns(com_ref, anchors_ref, box)
-
-        sn.read_frame(latest)
-        com_latest = sn.aa_cm()
-        anchors_latest, labels_latest = simple_column_clustering(com_latest, box, n_columns=30, verbose=False)
+    anchors, labels = simple_column_clustering(com_latest, box, n_columns=30, verbose=False)
+    assigned_columns, r = assign_fragments_to_columns(com_latest, anchors, box)
+    
+    proximity_threshold = 0.1 * r
+    
+    for mol_id in range(com_latest.shape[1]):
+        box_xy = box[:2]
         
-        for mol_id in range(com_latest.shape[1]):
-            if labels_latest[mol_id] == -1:
-                original_column_idx = assigned_columns_ref[mol_id]
-                original_anchor = anchors_ref[original_column_idx]
+        for col_idx, anchor in enumerate(anchors):
+            dist = pbc_distance(com_latest[:2, mol_id], anchor, box_xy)
+            
+            if dist < proximity_threshold:
+                if mol_id not in path_state.molecule_displacement_frames:
+                    path_state.molecule_displacement_frames[mol_id] = 0
+                path_state.molecule_displacement_frames[mol_id] += 1
                 
-                box_xy = box[:2]
-                dist = pbc_distance(com_latest[:2, mol_id], original_anchor, box_xy)
-                
-                if dist > HOP_DISTANCE_FACTOR * r:
-                    last_spin = path_state.molecule_last_spin_frame.get(mol_id, -COOLDOWN_MOLECULE)
-                    
-                    if path_state.analysis_frame_counter - last_spin >= COOLDOWN_MOLECULE:
-                        frame_num = extract_frame_number(latest.name)
-                        filename = f"{REF_XYZ_PREFIX}_m{mol_id}_t{frame_num}.dyn"
-                        
-                        target_anchor = None
-                        target_column_idx = None
-                        if len(anchors_latest) > 0:
-                            min_dist = float('inf')
-                            for j, anchor in enumerate(anchors_latest):
-                                d = pbc_distance(com_latest[:2, mol_id], anchor, box_xy)
-                                if d < min_dist:
-                                    min_dist = d
-                                    target_column_idx = j
-                            target_anchor = anchors_latest[target_column_idx]
-                        
-                        original_pos_str = f"({original_anchor[0]:.2f}, {original_anchor[1]:.2f})"
-                        if target_anchor is not None:
-                            target_pos_str = f"({target_anchor[0]:.2f}, {target_anchor[1]:.2f})"
-                            logline = f"{mol_id+1}, {original_column_idx}, {original_pos_str}, {target_column_idx}, {target_pos_str}, {frame_num}, {dist:.2f}"
-                        else:
-                            logline = f"{mol_id+1}, {original_column_idx}, {original_pos_str}, {frame_num}, {dist:.2f}"
-
-                        path_state.last_global_spin_frame = path_state.analysis_frame_counter
-                        path_state.molecule_last_spin_frame[mol_id] = path_state.analysis_frame_counter
-                        return 1, logline, filename
-
-        return 4, "", ""
+                if path_state.molecule_displacement_frames[mol_id] >= 10:
+                    logline = f"Molecule {mol_id+1} within {dist:.2f} A of column {col_idx} anchor for 10 frames. Killing simulation."
+                    return 2, logline, ""
+                break
+        else:
+            if mol_id in path_state.molecule_displacement_frames:
+                path_state.molecule_displacement_frames[mol_id] = 0
 
     return 4, "", ""
 
